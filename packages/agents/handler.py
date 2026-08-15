@@ -38,10 +38,29 @@ from packages.adapters.whatsapp.payloads import MensajeEntrante, TipoMensaje
 from packages.agents.agente import agente, limites
 from packages.agents.deps import DepsAgente
 from packages.agents.mensajes import PREFIJO_CONFIRMAR, PREFIJO_RECHAZAR, cuerpo_propuesta
-from packages.domain.identidad import Permiso
+from packages.domain.identidad import ClienteAutorizado, Permiso
 from packages.domain.propuesta import EstadoPropuesta, construir_propuesta
 
 log = logging.getLogger("agente.handler")
+
+
+def permisos_abiertos(declaracion: str) -> frozenset[Permiso]:
+    """Permisos que concede el acceso abierto.
+
+    Un valor desconocido se ignora en vez de reventar el turno: una errata en
+    el panel no debe dejar el número mudo. Si no queda ninguno válido se cae a
+    `consultar`, que es el mínimo con el que el agente aún sirve de algo.
+    """
+    validos = set()
+    for p in declaracion.split(","):
+        p = p.strip().lower()
+        if not p:
+            continue
+        try:
+            validos.add(Permiso(p))
+        except ValueError:
+            log.warning("permiso desconocido %r en PERMISOS_ABIERTOS; se ignora", p)
+    return frozenset(validos) or frozenset({Permiso.CONSULTAR})
 
 # Cuántos mensajes del historial se le devuelven al modelo. El tope real de
 # un turno lo pone max_requests_per_run; esto solo evita que una conversación
@@ -90,6 +109,17 @@ class HandlerAgente:
         self, conn: asyncpg.Connection, mensaje: MensajeEntrante, wa_id_hash: str
     ) -> list[dict[str, Any]]:
         cliente = await self._clientes.obtener(wa_id_hash)
+
+        # Acceso abierto: a quien no está registrado se le concede el conjunto
+        # configurado. Se comprueba `registrado` y no `puede(...)` para no
+        # pisar una desactivación explícita — desactivar es deliberado y esto
+        # no debe anularlo.
+        if not cliente.registrado and self._settings.acceso_abierto:
+            cliente = ClienteAutorizado(
+                wa_id_hash=wa_id_hash,
+                permisos=permisos_abiertos(self._settings.permisos_abiertos),
+                activo=True,
+            )
 
         # Sin permiso ni para conversar: se responde y se cierra, sin modelo.
         if not cliente.puede(Permiso.CONSULTAR):

@@ -52,6 +52,27 @@ class Settings(BaseSettings):
     # despliegue con la variable mal copiada no corte accesos en silencio.
     clientes_autorizados: str = ""
 
+    # Acceso abierto: cualquiera que escriba puede usar el agente sin figurar
+    # en `ventupilot.clientes`.
+    #
+    # Es una decisión de producto, no un atajo técnico, y tiene tres costes
+    # que conviene tener presentes al activarlo:
+    #
+    # - Cualquiera que dé con el número consume tokens y mensajes de WhatsApp.
+    #   No hay tope por remitente, solo por run.
+    # - Se pierde la trazabilidad de a quién se cotizó: no hay `customer_id`
+    #   que enlace la propuesta con un cliente de ventu 1.0.
+    # - La invariante 4 sigue en pie —el teléfono no autoriza por sí mismo—
+    #   pero la política pasa a ser "todos", que es una autorización explícita
+    #   y revisable, no una deducción a partir de un dato de terceros.
+    #
+    # No pisa una desactivación: quien esté registrado como inactivo sigue
+    # fuera, porque desactivar es un acto deliberado y esto no debe anularlo.
+    acceso_abierto: bool = False
+    # Qué se concede en acceso abierto. `pedir` queda fuera del defecto a
+    # propósito: es el permiso con impacto económico directo.
+    permisos_abiertos: str = "consultar,cotizar"
+
     # ── Datos ──
     # Esquema propio dentro de la Postgres de ventu 1.0.
     database_url: str = Field(min_length=1)
