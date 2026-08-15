@@ -39,7 +39,11 @@ _SELECT = """
            r.calculated_at
       FROM public.base_productbase p
       JOIN public.pricing_productpriceresult r
-        ON r.product_id = p.id
+        -- OJO: `base_productbase` NO tiene columna `id`. Su primary key es
+        -- `clickbox_id`, un UUID (ver base.ProductBase en ventu 1.0). Escribir
+        -- `p.id` por costumbre de Django compila en la cabeza pero revienta en
+        -- ejecución, y solo cuando alguien busca algo.
+        ON r.product_id = p.clickbox_id
        AND r.channel = $1
       LEFT JOIN public.base_brand b
         ON b.id = p.brand_id
