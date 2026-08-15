@@ -45,10 +45,22 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     agent_model: str = "openai:gpt-5.6-terra"
 
+    # ── Precios (motor de ventu 1.0) ──
+    # Canal del motor que define qué precio ve el agente: global | ml | shopify.
+    pricing_channel: str = "global"
+    # Un precio recalculado hace semanas no es un precio. Por encima de este
+    # umbral el producto se considera sin precio vigente y no se ofrece.
+    # Ojo: si el motor de precios de ventu 1.0 deja de correr, esto vacía el
+    # catálogo ofrecible en silencio.
+    precio_max_edad_horas: int = 48
+
     # ── Límites ──
     max_requests_per_run: int = 6
     max_tool_calls_per_run: int = 12
     propuesta_ttl_min: int = 30
+    # Tope de resultados que una búsqueda devuelve al modelo. Más que esto no
+    # mejora la respuesta y sí infla el costo de cada turno.
+    max_resultados_busqueda: int = 8
 
     log_level: str = "INFO"
 

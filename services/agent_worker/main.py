@@ -25,11 +25,15 @@ from typing import Any, Protocol
 import asyncpg
 
 from packages.adapters import outbox
+from packages.adapters.catalogo import CatalogoRepo
+from packages.adapters.clientes import ClientesRepo
 from packages.adapters.cola import ColaRepo, Tarea
 from packages.adapters.config import Settings, get_settings
+from packages.adapters.propuestas import PropuestasRepo
 from packages.adapters.whatsapp.client import ErrorWhatsApp, WhatsAppClient, cuerpo_texto
 from packages.adapters.whatsapp.identity import enmascarar, hash_wa_id
 from packages.adapters.whatsapp.payloads import MensajeEntrante, TipoMensaje
+from packages.agents.handler import HandlerAgente
 
 log = logging.getLogger("agent_worker")
 
@@ -45,18 +49,36 @@ RESPUESTA_NO_SOPORTADO = (
 
 
 class Handler(Protocol):
-    """Produce la respuesta a un mensaje. En Fase 2 lo implementa el agente."""
+    """Produce los mensajes de respuesta. En Fase 2 lo implementa el agente.
 
-    async def __call__(self, mensaje: MensajeEntrante) -> str | None: ...
+    Devuelve cuerpos de Graph API ya formados —no texto— porque una respuesta
+    puede necesitar botones: la cotización se confirma con un elemento
+    estructurado, no escribiendo "sí" (invariante 2). Una lista vacía
+    significa "no hay nada que responder".
+
+    Recibe la conexión de la transacción del worker para que lo que escriba
+    —conversación, historial, propuesta— entre o no entre junto con el
+    encolado en el outbox, sin estados a medias.
+    """
+
+    async def __call__(
+        self, conn: asyncpg.Connection, mensaje: MensajeEntrante, wa_id_hash: str
+    ) -> list[dict[str, Any]]: ...
 
 
-async def handler_eco(mensaje: MensajeEntrante) -> str | None:
-    """Fase 1: prueba el transporte completo sin nada de IA."""
+async def handler_eco(
+    conn: asyncpg.Connection, mensaje: MensajeEntrante, wa_id_hash: str
+) -> list[dict[str, Any]]:
+    """Fase 1: prueba el transporte completo sin nada de IA.
+
+    Se conserva para poder diagnosticar el transporte sin el agente de por
+    medio: si el eco llega y el agente no, el problema no está en Meta.
+    """
     if mensaje.tipo is TipoMensaje.NO_SOPORTADO:
-        return RESPUESTA_NO_SOPORTADO
+        return [cuerpo_texto(mensaje.wa_id, RESPUESTA_NO_SOPORTADO)]
     if not mensaje.texto:
-        return None
-    return f"recibí: {mensaje.texto}"
+        return []
+    return [cuerpo_texto(mensaje.wa_id, f"recibí: {mensaje.texto}")]
 
 
 class Worker:
@@ -98,9 +120,10 @@ class Worker:
 
     async def _ejecutar(self, conn: asyncpg.Connection, tarea: Tarea) -> None:
         mensaje = MensajeEntrante.model_validate(tarea.payload)
+        wa_id_hash = hash_wa_id(mensaje.wa_id, self._settings.wa_id_pepper)
 
-        respuesta = await self._handler(mensaje)
-        if respuesta is None:
+        cuerpos = await self._handler(conn, mensaje, wa_id_hash)
+        if not cuerpos:
             log.info(
                 "sin respuesta para %s de %s",
                 mensaje.wa_message_id,
@@ -108,16 +131,17 @@ class Worker:
             )
             return
 
-        # Derivada del mensaje entrante: reprocesar la misma tarea tras un fallo
-        # ambiguo no le manda al cliente la respuesta dos veces.
-        clave = f"resp:{mensaje.wa_message_id}"
-
-        await outbox.encolar_salida(
-            conn,
-            wa_id_hash=hash_wa_id(mensaje.wa_id, self._settings.wa_id_pepper),
-            idempotency_key=clave,
-            cuerpo=cuerpo_texto(mensaje.wa_id, respuesta),
-        )
+        for i, cuerpo in enumerate(cuerpos):
+            # Derivada del mensaje entrante y de la posición: reprocesar la
+            # misma tarea tras un fallo ambiguo no le manda al cliente las
+            # respuestas dos veces, y el índice las distingue entre sí cuando
+            # un turno produce texto y cotización.
+            await outbox.encolar_salida(
+                conn,
+                wa_id_hash=wa_id_hash,
+                idempotency_key=f"resp:{mensaje.wa_message_id}:{i}",
+                cuerpo=cuerpo,
+            )
 
     # ── Despacho ─────────────────────────────────────────────────────────────
 
@@ -179,12 +203,37 @@ async def main() -> None:
         min_size=settings.db_pool_min,
         max_size=settings.db_pool_max,
     )
+    # Pool aparte con el rol de solo lectura, exclusivo para el catálogo. Es
+    # lo que hace que un prompt injection no tenga privilegio que escalar: la
+    # tool que el modelo puede invocar no alcanza el pool de escritura.
+    # Sin DATABASE_URL_RO se cae al principal, que sirve para desarrollo pero
+    # pierde esa garantía; por eso se avisa.
+    if settings.database_url_ro:
+        pool_ro = await asyncpg.create_pool(
+            settings.database_url_ro,
+            min_size=settings.db_pool_min,
+            max_size=settings.db_pool_max,
+        )
+    else:
+        log.warning(
+            "DATABASE_URL_RO sin definir: el catálogo se lee con el rol de "
+            "escritura. No lo dejes así en producción."
+        )
+        pool_ro = pool
+
     cliente = WhatsAppClient(
         access_token=settings.wa_access_token,
         phone_number_id=settings.wa_phone_number_id,
         graph_version=settings.wa_graph_version,
     )
-    worker = Worker(pool, cliente, settings, handler_eco)
+
+    handler = HandlerAgente(
+        settings=settings,
+        catalogo=CatalogoRepo(pool_ro),
+        clientes=ClientesRepo(pool),
+        propuestas=PropuestasRepo(pool),
+    )
+    worker = Worker(pool, cliente, settings, handler)
 
     bucle = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
