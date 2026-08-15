@@ -30,11 +30,27 @@ No uses `GRANT SELECT ON ALL TABLES`: vuelve a abrir todo y anula el punto del r
 
 ## 2. Servicio en Railway
 
-En el proyecto **ventu-prod** (`edbf8c34-650c-4334-b744-0f264102fc7e`):
+En el proyecto **ventu-prod** (`36f9f6cb-c38a-47d0-ab2d-59c348af9a38`):
 
-1. **New Service → GitHub Repo** → `ventuglobal/ventupilot`, rama `claude/whatsapp-purchase-agent-dclrk8`.
+> Los dos servicios **ya están creados** en ese proyecto, con su
+> config-as-code, sus variables no-Meta y el dominio del gateway. Esta sección
+> queda como referencia de qué es cada cosa y para recrearlos desde cero.
+>
+> | Servicio | ID |
+> |---|---|
+> | `wa-gateway` | `4abfa9c7-c55a-4432-9db7-19bbd6908d61` |
+> | `agent-worker` | `17798411-5e88-4cd4-8c56-9a7ffce98006` |
+>
+> Son servicios **propios**: no comparten cómputo, despliegue ni escalado con
+> `web` y `worker` de ventu 1.0. Lo único compartido es la Postgres, y ahí
+> ventupilot escribe solo en su esquema.
+
+1. **New Service → GitHub Repo** → `ventuglobal/ventupilot`.
 2. Nombre: `wa-gateway`.
-3. **Settings → Config-as-code**: `railway.gateway.json`.
+3. **Settings → Source → Branch**: la rama que quieras desplegar. Un *project
+   token* no puede cambiarla por API (`serviceConnect` responde `Not
+   Authorized`), así que este paso es de panel sí o sí.
+4. **Settings → Config-as-code**: `railway.gateway.json`.
 
    Si prefieres no usarlo, el start command es:
    ```
@@ -42,7 +58,7 @@ En el proyecto **ventu-prod** (`edbf8c34-650c-4334-b744-0f264102fc7e`):
    ```
    `$PORT` lo inyecta Railway. Fijarlo a un número hace que el healthcheck falle.
 
-4. **Variables**:
+5. **Variables**:
 
    | Variable | Valor |
    |---|---|
@@ -54,7 +70,7 @@ En el proyecto **ventu-prod** (`edbf8c34-650c-4334-b744-0f264102fc7e`):
    El servicio **no arranca** si falta cualquiera de las cuatro. Es deliberado:
    un gateway con `WA_APP_SECRET` vacío aceptaría webhooks sin verificar.
 
-5. **Settings → Resources**: pon un límite de memoria. Comparte proyecto con
+6. **Settings → Resources**: pon un límite de memoria. Comparte proyecto con
    ventu 1.0 y no quieres que el gateway le compita por recursos.
 
 ### Servicio 2: agent-worker
@@ -78,12 +94,15 @@ conversación, pero no hay razón para escalar antes de tener volumen medido.
 
 ## 3. Dominio
 
-**Settings → Networking → Generate Domain.**
+Ya generado:
 
-Railway devuelve algo con la forma `wa-gateway-production-XXXX.up.railway.app`.
-El sufijo lo asigna Railway y no es predecible: hay que leerlo del dashboard
-después de generarlo. Si prefieres un dominio estable, usa **Custom Domain** con
-un subdominio propio (`wa.ventu.cl`) y evitas depender del generado.
+```
+https://wa-gateway-production-7cee.up.railway.app
+```
+
+El sufijo lo asignó Railway. Si prefieres algo estable y legible, añade un
+**Custom Domain** (`wa.ventu.cl`) y usa ese en Meta: cambiar la Callback URL más
+tarde obliga a re-verificar el webhook.
 
 Verifica antes de tocar Meta:
 
@@ -135,8 +154,16 @@ reintento de Meta no correrá el agente dos veces.
 - **Códigos de respuesta**: 403 firma inválida (Meta no reintenta), 200 payload
   sin mensajes, 503 si falla la base — ahí sí queremos el reintento, porque un
   200 con la base caída descarta el mensaje de un cliente en silencio.
-- **El worker responde con un eco.** Es deliberado: la Fase 1 prueba el
-  transporte completo sin nada de IA de por medio. El agente entra en Fase 2
-  sustituyendo un handler, sin tocar el resto.
+- **Qué versión se despliega depende de la rama del servicio.** La rama por
+  defecto del repo trae el handler de eco (Fase 1): transporte completo sin IA,
+  útil para diagnosticar. El agente (Fase 2) está en
+  `claude/railway-ventu-prod-connect-bhtavh` hasta que se mergee. Si el número
+  contesta "recibí: ..." en vez de conversar, es que el servicio está en la rama
+  de Fase 1.
+- **No interferir con ventu 1.0.** `wa-gateway` y `agent-worker` son servicios
+  aparte y no tocan `web` ni `worker`. Lo único compartido es la Postgres:
+  ventupilot escribe solo en el esquema `ventupilot` y lee `public` con el rol
+  de solo lectura. Por eso el pool tiene techo explícito — agotar
+  `max_connections` tumbaría ventu 1.0, no al agente.
 - **Audio e imágenes se rechazan con un mensaje explícito**, no con silencio. El
   cliente que manda una nota de voz recibe una respuesta que le dice qué hacer.
