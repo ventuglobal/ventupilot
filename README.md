@@ -126,6 +126,20 @@ arrancar:
 CLIENTES_AUTORIZADOS="+56 9 6626 6451:consultar,cotizar"
 ```
 
+### Acceso abierto
+
+Para pruebas o para un canal público, `ACCESO_ABIERTO=true` concede
+`PERMISOS_ABIERTOS` (por defecto `consultar,cotizar`) a cualquiera que escriba,
+sin necesidad de darlo de alta.
+
+No pisa una desactivación: quien esté registrado como inactivo sigue fuera.
+Y `pedir` queda fuera del defecto porque es el permiso con impacto económico.
+
+Con el canal abierto, la invariante 4 sigue en pie —el teléfono no autoriza por
+sí mismo— pero la política pasa a ser "todos". Eso es una autorización
+explícita y revisable; lo que la invariante prohíbe es deducir el permiso de un
+dato de terceros, no conceder acceso general a propósito.
+
 Declarativa y no imperativa a propósito: el estado deseado queda a la vista en
 el panel, no escondido en un comando que alguien corrió una vez. Es idempotente
 —hace UPSERT por `wa_id_hash`— y **no revoca**: quitar a alguien de la variable

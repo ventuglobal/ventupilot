@@ -49,6 +49,16 @@ class ClienteAutorizado(BaseModel):
     permisos: frozenset[Permiso] = Field(default_factory=frozenset)
     activo: bool = True
 
+    @property
+    def registrado(self) -> bool:
+        """Si existe una fila suya en `ventupilot.clientes`.
+
+        Distinto de `puede(...)`: un cliente registrado y desactivado sigue
+        estando registrado. Lo usa la política de acceso abierto para no
+        pisar una desactivación explícita.
+        """
+        return bool(self.wa_id_hash)
+
     def puede(self, permiso: Permiso) -> bool:
         """Una sola puerta para preguntar. Un cliente inactivo no puede nada.
 
