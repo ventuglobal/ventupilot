@@ -4,30 +4,30 @@ Agente conversacional de compra de productos por WhatsApp.
 
 ## Estado
 
-Fase 1 en curso. Lo que existe hoy es la capa de transporte: verificación de
-firma, hasheo de identidad y parseo del webhook, todo con tests y sin
-dependencias externas. El gateway HTTP, la cola y el agente vienen después.
+Fase 1. El gateway está completo: recibe, verifica firma, deduplica y encola.
+El worker y el agente vienen a continuación. Para desplegarlo y conectarlo con
+Meta, ver [DEPLOY.md](DEPLOY.md).
 
 ## Arquitectura
 
 ```
-Meta Cloud API ──▶ wa-gateway ──▶ cola (Postgres) ──▶ agent-worker ──▶ Saleor GraphQL
-   (webhook)       verifica HMAC                       Pydantic AI      (HTTPS público)
-                   dedupe                              tools
+Meta Cloud API ──▶ wa-gateway ──▶ cola (Postgres) ──▶ agent-worker ──▶ BD productos
+   (webhook)       verifica HMAC   esquema             Pydantic AI      (rol RO,
+                   dedupe          ventupilot          tools             red privada)
                    200 en <2s                          responde
 ```
 
-Dos servicios de Railway en el proyecto `ventupilot`, más una Postgres propia.
-**Saleor vive en otro proyecto de Railway** (`ventu-saleor`), y la red privada
-de Railway existe solo dentro de un mismo proyecto y entorno — así que Saleor se
-alcanza por su endpoint GraphQL público con un App token de permisos mínimos.
+Todo vive en el proyecto **ventu-prod** de Railway, junto a ventu 1.0. Eso da
+acceso por red privada a la Postgres de productos, y a cambio obliga a acotar
+explícitamente lo que el agente puede hacer ahí:
 
-Eso tiene una consecuencia de diseño que conviene entender antes de tocar nada:
-**la base de datos de Saleor no es la fuente de precios.** Los precios de Saleor
-dependen del canal, de las listas de precios por canal, de las promociones
-activas y de la configuración de impuestos. Reconstruir eso con `SELECT` sobre
-sus tablas es reimplementar su motor de precios, y va a divergir. Todo precio
-sale de la GraphQL API.
+- **Rol de Postgres de solo lectura** para el catálogo, con `GRANT SELECT` tabla
+  por tabla. Es lo que convierte un prompt injection en un no-evento: aunque el
+  modelo sea manipulado, no hay privilegio que escalar.
+- **El estado del agente vive en el esquema `ventupilot`**, separado de las
+  tablas de la aplicación. Se puede borrar entero sin tocar nada de ventu 1.0.
+- **Techo de conexiones explícito** en el pool. Con varias réplicas es fácil
+  agotar `max_connections`, y el que se cae entonces es la app principal.
 
 ## Invariantes
 
@@ -63,17 +63,20 @@ todos los `wa_id_hash` almacenados.
 ## Estructura
 
 ```
+migrations/          esquema SQL
 packages/
   domain/            modelos de negocio, sin I/O
-  adapters/          I/O: Saleor, Postgres, WhatsApp
+  adapters/
+    config.py        settings; falla al arrancar si falta algo crítico
+    cola.py          cola y dedupe sobre Postgres, con lock por conversación
     whatsapp/
       signature.py   HMAC del webhook
-      identity.py    hasheo de wa_id
+      identity.py    hasheo de wa_id con pepper
       payloads.py    parseo del payload anidado
-  agents/            agente y tools (Pydantic AI)
+  agents/            agente y tools (Pydantic AI)   ← pendiente
 services/
   wa_gateway/        FastAPI: recibe, verifica, encola
-  agent_worker/      consume la cola, corre el agente, responde
+  agent_worker/      consume la cola, corre el agente, responde  ← pendiente
 ```
 
 `domain/` no importa nada de `adapters/`. Esa frontera es lo que permite testear
