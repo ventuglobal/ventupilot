@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # Sin pepper el hash de un móvil chileno es reversible por fuerza bruta.
     wa_id_pepper: str = Field(min_length=32)
 
+    # Altas declarativas que el worker aplica al arrancar (invariante 4).
+    # Formato: "+56 9 6626 6451:consultar,cotizar; 56900000000:consultar".
+    # Quitar a alguien de aquí NO lo revoca: revocar es explícito, para que un
+    # despliegue con la variable mal copiada no corte accesos en silencio.
+    clientes_autorizados: str = ""
+
     # ── Datos ──
     # Esquema propio dentro de la Postgres de ventu 1.0.
     database_url: str = Field(min_length=1)

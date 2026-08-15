@@ -24,7 +24,7 @@ from typing import Any, Protocol
 
 import asyncpg
 
-from packages.adapters import outbox
+from packages.adapters import altas, outbox
 from packages.adapters.catalogo import CatalogoRepo
 from packages.adapters.clientes import ClientesRepo
 from packages.adapters.cola import ColaRepo, Tarea
@@ -230,10 +230,21 @@ async def main() -> None:
         kapso_base_url=settings.kapso_base_url,
     )
 
+    clientes = ClientesRepo(pool)
+
+    # Altas declaradas por entorno. Se aplican antes de procesar nada para que
+    # un despliegue no deje una ventana en la que el remitente recién
+    # autorizado siga recibiendo "no autorizado".
+    if settings.clientes_autorizados:
+        aplicados = await altas.aplicar(
+            clientes, settings.clientes_autorizados, settings.wa_id_pepper
+        )
+        log.info("altas aplicadas: %d", aplicados)
+
     handler = HandlerAgente(
         settings=settings,
         catalogo=CatalogoRepo(pool_ro),
-        clientes=ClientesRepo(pool),
+        clientes=clientes,
         propuestas=PropuestasRepo(pool),
     )
     worker = Worker(pool, cliente, settings, handler)
