@@ -56,6 +56,39 @@ def cuerpo_texto(wa_id: str, texto: str) -> dict[str, Any]:
     }
 
 
+def _leer_error(datos: dict[str, Any]) -> tuple[str, int | None]:
+    """Extrae (mensaje, código) de una respuesta de error.
+
+    Meta y Kapso comparten la forma del **éxito**, pero no la del error: Meta
+    devuelve `{"error": {"message": ..., "code": ...}}` y Kapso a veces manda
+    `{"error": "texto"}`. Asumir la forma de Meta reventaba con
+    `AttributeError` dentro del bucle de despacho, que es el peor sitio
+    posible: tumbaba el bucle entero en vez de fallar solo ese envío.
+
+    Se acepta cualquiera de las dos y se cae a un texto genérico antes que
+    lanzar.
+    """
+    error = datos.get("error")
+
+    if isinstance(error, dict):
+        codigo = error.get("code")
+        return (
+            str(error.get("message") or "error desconocido"),
+            codigo if isinstance(codigo, int) else None,
+        )
+
+    if isinstance(error, str) and error:
+        return error, None
+
+    # Algunos backends ponen el detalle en otras claves antes que en `error`.
+    for clave in ("message", "detail", "errors"):
+        valor = datos.get(clave)
+        if valor:
+            return str(valor)[:300], None
+
+    return "error desconocido", None
+
+
 class WhatsAppClient:
     """Envía mensajes por Meta directo o a través de Kapso.
 
@@ -147,13 +180,13 @@ class WhatsAppClient:
             ) from e
 
         if r.status_code >= 400 or "error" in datos:
-            error = datos.get("error") or {}
-            codigo = error.get("code")
-            reintentable = codigo not in CODIGOS_NO_REINTENTABLES
+            mensaje, codigo = _leer_error(datos)
+            # Sin código no hay forma de saber si es permanente. Se reintenta:
+            # un fallo transitorio recuperable pesa más que unas cuantas
+            # llamadas de más, y el outbox tiene tope de intentos.
+            reintentable = codigo is None or codigo not in CODIGOS_NO_REINTENTABLES
             raise ErrorWhatsApp(
-                f"{error.get('message', 'error desconocido')} (código {codigo})",
-                codigo=codigo,
-                reintentable=reintentable,
+                f"{mensaje} (código {codigo})", codigo=codigo, reintentable=reintentable
             )
 
         mensajes = datos.get("messages") or []
