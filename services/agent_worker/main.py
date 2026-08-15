@@ -225,6 +225,9 @@ async def main() -> None:
         access_token=settings.wa_access_token,
         phone_number_id=settings.wa_phone_number_id,
         graph_version=settings.wa_graph_version,
+        transporte=settings.wa_transporte,
+        kapso_api_key=settings.kapso_api_key,
+        kapso_base_url=settings.kapso_base_url,
     )
 
     handler = HandlerAgente(

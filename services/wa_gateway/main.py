@@ -33,7 +33,11 @@ from packages.adapters.cola import ColaRepo
 from packages.adapters.config import Settings, get_settings
 from packages.adapters.whatsapp.identity import enmascarar, hash_wa_id
 from packages.adapters.whatsapp.payloads import parsear_webhook
-from packages.adapters.whatsapp.signature import verificar_firma, verificar_handshake
+from packages.adapters.whatsapp.signature import (
+    verificar_firma,
+    verificar_firma_kapso,
+    verificar_handshake,
+)
 
 log = logging.getLogger("wa_gateway")
 
@@ -90,6 +94,7 @@ async def verificar(request: Request) -> Response:
 async def recibir(
     request: Request,
     x_hub_signature_256: str | None = Header(default=None),
+    x_webhook_signature: str | None = Header(default=None),
 ) -> Response:
     settings: Settings = request.app.state.settings
     cola: ColaRepo = request.app.state.cola
@@ -98,8 +103,20 @@ async def recibir(
     # estos bytes exactos; el JSON re-serializado produce otra firma.
     body = await request.body()
 
-    if not verificar_firma(body, x_hub_signature_256, settings.wa_app_secret):
-        log.warning("firma inválida; %d bytes descartados", len(body))
+    # Cada transporte firma en su cabecera y con su secreto. Se comprueba solo
+    # la del transporte configurado: aceptar cualquiera de las dos permitiría
+    # a quien conozca el secreto en desuso colar mensajes.
+    if settings.wa_transporte == "kapso":
+        firma_ok = verificar_firma_kapso(
+            body, x_webhook_signature, settings.kapso_webhook_secret
+        )
+    else:
+        firma_ok = verificar_firma(body, x_hub_signature_256, settings.wa_app_secret)
+
+    if not firma_ok:
+        log.warning(
+            "firma inválida (%s); %d bytes descartados", settings.wa_transporte, len(body)
+        )
         return JSONResponse({"error": "firma inválida"}, status_code=403)
 
     try:

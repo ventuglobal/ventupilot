@@ -118,7 +118,49 @@ Si el segundo devuelve `403`, el `WA_VERIFY_TOKEN` del servicio no coincide con
 el que estás pasando. Meta no da más detalle que "no se pudo validar", así que
 conviene descartarlo con curl primero.
 
-## 4. Meta
+## 4. Proveedor: Meta directo o Kapso
+
+`WA_TRANSPORTE` decide cuál. Kapso es un **proxy compatible con Meta**: mismo
+cuerpo JSON en los mensajes, y con `--kind meta` reenvía el payload entrante sin
+modificar. Por eso cambiar de proveedor no toca el agente ni el render de las
+cotizaciones — solo la URL de envío, la cabecera de autenticación y la de firma.
+
+### Opción A — Kapso
+
+```bash
+npm install -g @kapso/cli
+kapso login                 # OAuth por navegador
+kapso setup                 # provisiona el número
+```
+
+Después, apuntar el webhook al gateway ya desplegado:
+
+```bash
+kapso whatsapp webhooks new \
+  --url https://wa-gateway-production-7cee.up.railway.app/webhook \
+  --kind meta \
+  --event whatsapp.message.received \
+  --secret-key "<generar y guardar>" \
+  --active
+```
+
+`--kind meta` es obligatorio para que el parser siga sirviendo. El
+`--secret-key` va a `KAPSO_WEBHOOK_SECRET` en los dos servicios de Railway, y
+`WA_TRANSPORTE=kapso` con `KAPSO_API_KEY`.
+
+Dos diferencias con Meta que muerden si no se ven venir:
+
+- **La firma llega en `X-Webhook-Signature`, en hex pelado**, sin el prefijo
+  `sha256=`. Es HMAC-SHA256 sobre el cuerpo crudo, igual que Meta.
+- **No hay handshake GET.** Kapso no verifica la URL como hace Meta, así que
+  `WA_VERIFY_TOKEN` deja de usarse en este modo.
+
+Kapso además ofrece buffering (`--buffer-enabled`, `--buffer-window-seconds`),
+que agrupa mensajes seguidos del mismo remitente. Se solapa con el advisory lock
+por conversación: no hace falta, pero puede reducir turnos —y por tanto costo—
+si se activa con una ventana corta.
+
+### Opción B — Meta directo
 
 **App Dashboard → WhatsApp → Configuration → Webhook → Edit:**
 

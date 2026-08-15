@@ -57,6 +57,15 @@ def cuerpo_texto(wa_id: str, texto: str) -> dict[str, Any]:
 
 
 class WhatsAppClient:
+    """Envía mensajes por Meta directo o a través de Kapso.
+
+    Kapso expone un proxy compatible con Graph API: mismo verbo, misma ruta a
+    partir de la versión, y **el mismo cuerpo JSON**. Por eso el transporte no
+    afecta a `cuerpo_texto` ni a los cuerpos interactivos: solo cambian el host
+    y la cabecera de autenticación. Mantenerlo así es lo que permite cambiar de
+    proveedor sin tocar el agente.
+    """
+
     def __init__(
         self,
         access_token: str,
@@ -64,6 +73,10 @@ class WhatsAppClient:
         graph_version: str = "v23.0",
         cliente: httpx.AsyncClient | None = None,
         timeout: float = 10.0,
+        *,
+        transporte: str = "meta",
+        kapso_api_key: str = "",
+        kapso_base_url: str = "https://api.kapso.ai",
     ) -> None:
         self._token = access_token
         self._phone_number_id = phone_number_id
@@ -72,13 +85,27 @@ class WhatsAppClient:
         self._timeout = timeout
         self._cliente = cliente
         self._propio = cliente is None
+        self._transporte = transporte
+        self._kapso_api_key = kapso_api_key
+        self._kapso_base_url = kapso_base_url.rstrip("/")
 
     @property
     def _url(self) -> str:
+        if self._transporte == "kapso":
+            return (
+                f"{self._kapso_base_url}/meta/whatsapp/{self._version}"
+                f"/{self._phone_number_id}/messages"
+            )
         return (
             f"https://graph.facebook.com/{self._version}"
             f"/{self._phone_number_id}/messages"
         )
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        if self._transporte == "kapso":
+            return {"X-API-Key": self._kapso_api_key}
+        return {"Authorization": f"Bearer {self._token}"}
 
     async def _http(self) -> httpx.AsyncClient:
         if self._cliente is None:
@@ -101,11 +128,7 @@ class WhatsAppClient:
         http = await self._http()
 
         try:
-            r = await http.post(
-                self._url,
-                json=cuerpo,
-                headers={"Authorization": f"Bearer {self._token}"},
-            )
+            r = await http.post(self._url, json=cuerpo, headers=self._headers)
         except httpx.TimeoutException as e:
             raise ErrorWhatsApp(f"timeout hacia Graph API: {e}", reintentable=True) from e
         except httpx.HTTPError as e:
