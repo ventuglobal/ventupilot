@@ -8,6 +8,7 @@ por descuido.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,21 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
+
+    # ── Transporte de WhatsApp ──
+    # "meta"  → Cloud API directa. `WA_ACCESS_TOKEN` autentica el envío y
+    #           `WA_APP_SECRET` verifica la firma entrante.
+    # "kapso" → Kapso como proveedor. Es un proxy compatible con Meta: el
+    #           cuerpo de los mensajes es idéntico, así que solo cambian la
+    #           URL, la cabecera de autenticación y la de firma.
+    wa_transporte: Literal["meta", "kapso"] = "meta"
+
+    # Solo para wa_transporte="kapso".
+    kapso_api_key: str = ""
+    kapso_base_url: str = "https://api.kapso.ai"
+    # Secreto del webhook configurado en Kapso (`--secret-key`). Firma en
+    # `X-Webhook-Signature`, hex pelado, sobre el cuerpo crudo.
+    kapso_webhook_secret: str = ""
 
     # ── WhatsApp ──
     wa_app_secret: str = Field(min_length=1)
@@ -45,12 +61,36 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     agent_model: str = "openai:gpt-5.6-terra"
 
+    # ── Precios (motor de ventu 1.0) ──
+    # Canal del motor que define qué precio ve el agente: global | ml | shopify.
+    pricing_channel: str = "global"
+    # Un precio recalculado hace semanas no es un precio. Por encima de este
+    # umbral el producto se considera sin precio vigente y no se ofrece.
+    # Ojo: si el motor de precios de ventu 1.0 deja de correr, esto vacía el
+    # catálogo ofrecible en silencio.
+    precio_max_edad_horas: int = 48
+
     # ── Límites ──
     max_requests_per_run: int = 6
     max_tool_calls_per_run: int = 12
     propuesta_ttl_min: int = 30
+    # Tope de resultados que una búsqueda devuelve al modelo. Más que esto no
+    # mejora la respuesta y sí infla el costo de cada turno.
+    max_resultados_busqueda: int = 8
 
     log_level: str = "INFO"
+
+    @property
+    def secreto_de_firma(self) -> str:
+        """Secreto con el que se verifica el webhook entrante.
+
+        Cambia con el transporte: Meta firma con el app secret, Kapso con el
+        secreto propio del webhook. Resolverlo aquí evita que cada llamador
+        tenga que acordarse del `if`.
+        """
+        if self.wa_transporte == "kapso":
+            return self.kapso_webhook_secret
+        return self.wa_app_secret
 
 
 @lru_cache

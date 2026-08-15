@@ -18,6 +18,11 @@ import hmac
 SIGNATURE_HEADER = "X-Hub-Signature-256"
 _PREFIX = "sha256="
 
+# Kapso, cuando actúa de proveedor, firma con el mismo algoritmo pero en otra
+# cabecera y **sin el prefijo** `sha256=`. Es la única diferencia real, y
+# confundirlas produce un 403 permanente que parece un secreto mal copiado.
+SIGNATURE_HEADER_KAPSO = "X-Webhook-Signature"
+
 
 def firmar(body: bytes, app_secret: str) -> str:
     """Devuelve la cabecera de firma que Meta enviaría para `body`.
@@ -63,6 +68,27 @@ def verificar_firma(body: bytes, header: str | None, app_secret: str) -> bool:
     # compare_digest evita filtrar información por el tiempo de comparación.
     # Comparamos en minúsculas porque el hex de Meta podría llegar en cualquier
     # caja; compare_digest sí distingue mayúsculas.
+    return hmac.compare_digest(recibido.lower(), esperado)
+
+
+def verificar_firma_kapso(body: bytes, header: str | None, secreto: str) -> bool:
+    """Verifica la firma de un webhook reenviado por Kapso.
+
+    Mismo HMAC-SHA256 sobre el cuerpo crudo que Meta, con dos diferencias:
+    llega en `X-Webhook-Signature` y el hex va **pelado**, sin el prefijo
+    `sha256=`. Se acepta el prefijo igualmente por si lo añaden en el futuro;
+    rechazar por eso sería un fallo tonto y difícil de diagnosticar.
+
+    Falla cerrado ante cualquier anomalía, igual que `verificar_firma`.
+    """
+    if not secreto or not header:
+        return False
+
+    recibido = header[len(_PREFIX) :] if header.startswith(_PREFIX) else header
+    if not recibido:
+        return False
+
+    esperado = firmar(body, secreto)[len(_PREFIX) :]
     return hmac.compare_digest(recibido.lower(), esperado)
 
 
