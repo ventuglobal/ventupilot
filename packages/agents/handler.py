@@ -191,6 +191,10 @@ class HandlerAgente:
             resultado = await agente.run(
                 texto,
                 deps=deps,
+                # El modelo se pasa por run y no se fija en el `Agent`: así
+                # `AGENT_MODEL` se puede cambiar por entorno sin tocar código,
+                # y los tests siguen pudiendo inyectar el suyo.
+                model=self._settings.agent_model,
                 message_history=historial,
                 usage_limits=limites(self._settings),
             )
