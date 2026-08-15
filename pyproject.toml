@@ -47,3 +47,9 @@ ignore = ["S101"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+# asyncpg no publica py.typed. Se acota el ignore a ese módulo en lugar de
+# desactivar la comprobación de imports globalmente.
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]
+ignore_missing_imports = true

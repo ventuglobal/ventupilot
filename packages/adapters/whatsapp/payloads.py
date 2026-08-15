@@ -197,12 +197,14 @@ def parsear_webhook(payload: dict[str, Any], recibido_at: datetime | None = None
 
             phone_number_id = (value.get("metadata") or {}).get("phone_number_id") or ""
 
-            nombres = {
-                c["wa_id"]: (c.get("profile") or {}).get("name")
-                for c in (value.get("contacts") or [])
-                if isinstance(c, dict) and c.get("wa_id")
-            }
-            nombres = {k: v for k, v in nombres.items() if v}
+            nombres: dict[str, str] = {}
+            for contacto in value.get("contacts") or []:
+                if not isinstance(contacto, dict):
+                    continue
+                wa_id = contacto.get("wa_id")
+                nombre = (contacto.get("profile") or {}).get("name")
+                if wa_id and nombre:
+                    nombres[wa_id] = nombre
 
             for msg in value.get("messages") or []:
                 if not isinstance(msg, dict):
