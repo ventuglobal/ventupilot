@@ -57,6 +57,25 @@ En el proyecto **ventu-prod** (`edbf8c34-650c-4334-b744-0f264102fc7e`):
 5. **Settings → Resources**: pon un límite de memoria. Comparte proyecto con
    ventu 1.0 y no quieres que el gateway le compita por recursos.
 
+### Servicio 2: agent-worker
+
+Mismo repo y misma rama, nombre `agent-worker`, config `railway.worker.json`.
+No expone puerto y no necesita dominio: solo lee la cola.
+
+Variables: las mismas cuatro del gateway, más las de envío —
+
+| Variable | Valor |
+|---|---|
+| `WA_ACCESS_TOKEN` | System User token, permanente |
+| `WA_PHONE_NUMBER_ID` | Meta → WhatsApp → API Setup |
+
+**`WA_ID_PEPPER` tiene que ser idéntico en ambos servicios.** Si difieren, cada
+uno calcula un `wa_id_hash` distinto para el mismo número y las conversaciones
+se parten en dos sin dar ningún error.
+
+Empieza con **1 réplica**. El advisory lock protege el orden dentro de cada
+conversación, pero no hay razón para escalar antes de tener volumen medido.
+
 ## 3. Dominio
 
 **Settings → Networking → Generate Domain.**
@@ -116,5 +135,8 @@ reintento de Meta no correrá el agente dos veces.
 - **Códigos de respuesta**: 403 firma inválida (Meta no reintenta), 200 payload
   sin mensajes, 503 si falla la base — ahí sí queremos el reintento, porque un
   200 con la base caída descarta el mensaje de un cliente en silencio.
-- **El worker todavía no existe.** Los mensajes se encolan y se quedan ahí. El
-  eco y el agente vienen en el siguiente incremento.
+- **El worker responde con un eco.** Es deliberado: la Fase 1 prueba el
+  transporte completo sin nada de IA de por medio. El agente entra en Fase 2
+  sustituyendo un handler, sin tocar el resto.
+- **Audio e imágenes se rechazan con un mensaje explícito**, no con silencio. El
+  cliente que manda una nota de voz recibe una respuesta que le dice qué hacer.

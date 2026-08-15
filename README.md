@@ -4,9 +4,11 @@ Agente conversacional de compra de productos por WhatsApp.
 
 ## Estado
 
-Fase 1. El gateway está completo: recibe, verifica firma, deduplica y encola.
-El worker y el agente vienen a continuación. Para desplegarlo y conectarlo con
-Meta, ver [DEPLOY.md](DEPLOY.md).
+**Fase 1 completa.** El circuito entero funciona sin IA de por medio: el gateway
+recibe, verifica firma, deduplica y encola; el worker consume, responde con un
+eco y despacha por el outbox. La Fase 2 sustituye un handler por el agente.
+
+Pendiente: desplegar y conectar con Meta — ver [DEPLOY.md](DEPLOY.md).
 
 ## Arquitectura
 
@@ -34,8 +36,9 @@ explícitamente lo que el agente puede hacer ahí:
 Se revisan en cada PR. Si una se rompe, el PR no entra.
 
 1. **El modelo nunca calcula dinero.** Totales, descuentos, impuestos y plazos
-   salen de Saleor. El agente devuelve SKUs y cantidades; el backend consulta
-   los precios y renderiza el mensaje.
+   salen de la base de productos. El agente devuelve SKUs y cantidades; el
+   backend consulta los precios y renderiza el mensaje. Así la invariante la
+   garantiza el código, no una instrucción del prompt.
 2. **El modelo nunca ejecuta la transacción.** Propone; el usuario confirma con
    un elemento estructurado; el backend ejecuta.
 3. **La identidad viene de `deps`, no de argumentos del modelo.**
@@ -69,14 +72,16 @@ packages/
   adapters/
     config.py        settings; falla al arrancar si falta algo crítico
     cola.py          cola y dedupe sobre Postgres, con lock por conversación
+    outbox.py        mensajes salientes, reintentables
     whatsapp/
       signature.py   HMAC del webhook
       identity.py    hasheo de wa_id con pepper
       payloads.py    parseo del payload anidado
-  agents/            agente y tools (Pydantic AI)   ← pendiente
+      client.py      Graph API — el único sitio que hace POST a Meta
+  agents/            agente y tools (Pydantic AI)   ← Fase 2
 services/
   wa_gateway/        FastAPI: recibe, verifica, encola
-  agent_worker/      consume la cola, corre el agente, responde  ← pendiente
+  agent_worker/      consume la cola, procesa, despacha el outbox
 ```
 
 `domain/` no importa nada de `adapters/`. Esa frontera es lo que permite testear
