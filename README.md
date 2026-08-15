@@ -116,12 +116,25 @@ Reconstruir el precio a partir del costo sería reimplementar el motor de
 precios de ventu 1.0, y va a divergir. Por eso se lee `precio_final` y no se
 toca.
 
+## Dar de alta remitentes
+
+`ventupilot.clientes` arranca vacía y nadie se auto-registra (invariante 4).
+Las altas se declaran en `CLIENTES_AUTORIZADOS` y el worker las aplica al
+arrancar:
+
+```
+CLIENTES_AUTORIZADOS="+56 9 6626 6451:consultar,cotizar"
+```
+
+Declarativa y no imperativa a propósito: el estado deseado queda a la vista en
+el panel, no escondido en un comando que alguien corrió una vez. Es idempotente
+—hace UPSERT por `wa_id_hash`— y **no revoca**: quitar a alguien de la variable
+no le corta el acceso, para que un despliegue con la variable mal copiada no
+deje a nadie fuera en silencio. Revocar es explícito, con
+`ClientesRepo.desactivar`.
+
 ## Pendiente
 
-- **Dar de alta remitentes.** `ventupilot.clientes` arranca vacía y, por
-  diseño, nadie se auto-registra: hasta que se pueble, todo el mundo recibe el
-  mensaje de "no autorizado". Falta el comando que envuelva a
-  `ClientesRepo.autorizar`.
 - **Ejecutar el pedido.** Una propuesta confirmada queda registrada y se avisa
   a un ejecutivo. `ventupilot.ordenes` existe pero nadie la escribe todavía:
   crear la orden en ventu 1.0 es escritura sobre tablas de Django y hay que
