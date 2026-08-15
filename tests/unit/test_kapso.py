@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from packages.adapters.config import Settings
-from packages.adapters.whatsapp.client import WhatsAppClient, cuerpo_texto
+from packages.adapters.whatsapp.client import ErrorWhatsApp, WhatsAppClient, cuerpo_texto
 from packages.adapters.whatsapp.signature import (
     firmar,
     verificar_firma,
@@ -126,3 +126,55 @@ async def test_el_cuerpo_es_identico_en_ambos_transportes():
     meta = await _capturar("meta")
     kapso = await _capturar("kapso", kapso_api_key="clave-kapso")
     assert meta.content == kapso.content
+
+
+# ── Forma del error ──────────────────────────────────────────────────────────
+
+
+async def _enviar_con_respuesta(status: int, payload: dict) -> Exception | None:
+    """Envía contra una respuesta fija y devuelve la excepción, si la hubo."""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=payload)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(responder))
+    cliente = WhatsAppClient(
+        access_token="t", phone_number_id="PNID", cliente=http,
+        transporte="kapso", kapso_api_key="k",
+    )
+    try:
+        await cliente.enviar(cuerpo_texto("56911112222", "hola"))
+    except Exception as exc:  # noqa: BLE001 - es justo lo que se prueba
+        return exc
+    finally:
+        await http.aclose()
+    return None
+
+
+async def test_error_como_string_no_revienta():
+    """Kapso devuelve {"error": "texto"}; Meta devuelve un objeto.
+
+    Asumir la forma de Meta lanzaba AttributeError dentro del bucle de
+    despacho del worker y lo tumbaba entero, en vez de fallar solo ese envío.
+    """
+    exc = await _enviar_con_respuesta(401, {"error": "invalid api key"})
+    assert isinstance(exc, ErrorWhatsApp)
+    assert "invalid api key" in str(exc)
+    # Sin código no se puede afirmar que sea permanente: se reintenta.
+    assert exc.reintentable
+
+
+async def test_error_como_objeto_de_meta_sigue_funcionando():
+    exc = await _enviar_con_respuesta(
+        400, {"error": {"message": "fuera de ventana", "code": 131047}}
+    )
+    assert isinstance(exc, ErrorWhatsApp)
+    assert exc.codigo == 131047
+    # 131047 es la ventana de 24h: reintentar no la reabre.
+    assert not exc.reintentable
+
+
+async def test_error_sin_forma_reconocible_no_revienta():
+    exc = await _enviar_con_respuesta(500, {"detail": "algo pasó"})
+    assert isinstance(exc, ErrorWhatsApp)
+    assert exc.reintentable
