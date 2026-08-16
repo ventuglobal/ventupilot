@@ -38,12 +38,12 @@ explícitamente lo que el agente puede hacer ahí:
 
 Se revisan en cada PR. Si una se rompe, el PR no entra.
 
-1. **El modelo nunca calcula dinero.** El precio sale del motor de precios de
-   ventu 1.0 (`pricing_productpriceresult.precio_final`), que ya resolvió
-   costo, markup, IVA, redondeo y campañas. El agente devuelve SKUs y
-   cantidades —`SeleccionLinea`, un tipo sin dónde poner un monto— y el
-   backend valoriza y renderiza. La invariante la garantiza el código, no una
-   instrucción del prompt.
+1. **El modelo nunca calcula dinero.** El agente devuelve SKUs y cantidades
+   —`SeleccionLinea`, un tipo sin dónde poner un monto— y el backend valoriza
+   y renderiza. La invariante la garantiza el código, no una instrucción del
+   prompt. La fórmula la elige `PRECIO_ORIGEN`: el motor de precios de
+   ventu 1.0, o el costo bruto por un factor. Lo que no cambia nunca es quién
+   la ejecuta.
 2. **El modelo nunca ejecuta la transacción.** Propone; el usuario confirma con
    un elemento estructurado; el backend ejecuta.
 3. **La identidad viene de `deps`, no de argumentos del modelo.**
@@ -112,9 +112,21 @@ El agente lee dos tablas de ventu 1.0, ambas en solo lectura:
   (`merged_into_id`) y los que no tienen stock.
 - `pricing_productpriceresult` — precio por producto y canal.
 
-Reconstruir el precio a partir del costo sería reimplementar el motor de
-precios de ventu 1.0, y va a divergir. Por eso se lee `precio_final` y no se
-toca.
+### De dónde sale el precio
+
+`PRECIO_ORIGEN` decide entre dos fórmulas, y la diferencia es de negocio:
+
+- **`motor`** — `pricing_productpriceresult.precio_final`, que ya resolvió
+  costo, markup, IVA, campañas y la aritmética de cada canal. Es el precio con
+  el que ventu 1.0 publica. Cubre solo lo que el motor alcanzó a calcular, y
+  cada canal se recalcula a su propio ritmo.
+- **`costo`** — `costo_credito` (el bruto, D3) por `PRECIO_FACTOR`. Cubre todo
+  el catálogo que tenga costo, a cambio de no aplicar campañas ni las
+  comisiones específicas de cada canal.
+
+`costo_contado` (D4) está etiquetado **neto** en ventu 1.0. Con el mismo factor
+da un precio sistemáticamente más bajo: no son bases intercambiables, y por eso
+no hay fallback de una a otra.
 
 ## Dar de alta remitentes
 

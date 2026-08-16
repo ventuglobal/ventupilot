@@ -243,7 +243,12 @@ async def main() -> None:
 
     handler = HandlerAgente(
         settings=settings,
-        catalogo=CatalogoRepo(pool_ro),
+        catalogo=CatalogoRepo(
+            pool_ro,
+            origen=settings.precio_origen,
+            factor=settings.precio_factor,
+            costo=settings.precio_costo,
+        ),
         clientes=clientes,
         propuestas=PropuestasRepo(pool),
     )

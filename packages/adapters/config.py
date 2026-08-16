@@ -7,6 +7,7 @@ por descuido.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
@@ -89,7 +90,32 @@ class Settings(BaseSettings):
     agent_model: str = "openai:gpt-5.6-terra"
 
     # ── Precios (motor de ventu 1.0) ──
+    # De dónde sale el precio que se cotiza:
+    #
+    # "motor"  → pricing_productpriceresult.precio_final, la salida del motor
+    #            de precios de ventu 1.0 (costo, markup, IVA, campañas).
+    # "costo"  → costo bruto del producto por `precio_factor`. Decisión de
+    #            negocio: cubre todo el catálogo con costo, no solo lo que el
+    #            motor alcanzó a calcular, a cambio de no aplicar campañas ni
+    #            la aritmética específica de cada canal.
+    #
+    # En ambos casos el precio lo produce el backend, nunca el modelo
+    # (invariante 1). Lo que cambia es la fórmula, no quién la ejecuta.
+    precio_origen: Literal["motor", "costo"] = "motor"
+
+    # Multiplicador sobre el costo cuando precio_origen="costo".
+    precio_factor: Decimal = Decimal("1.4")
+
+    # Qué costo se toma como base.
+    # "credito" → costo_credito (D3, web LK). Es el **bruto**, y el que usa el
+    #             propio motor de ventu 1.0 en marketplace_price.
+    # "contado" → costo_contado (D4), que el modelo de ventu 1.0 etiqueta como
+    #             NETO. Usarlo con el mismo factor da un precio sistemáticamente
+    #             más bajo: no son bases intercambiables.
+    precio_costo: Literal["credito", "contado"] = "credito"
+
     # Canal del motor que define qué precio ve el agente: global | ml | shopify.
+    # Solo se usa con precio_origen="motor".
     pricing_channel: str = "global"
     # Un precio recalculado hace semanas no es un precio. Por encima de este
     # umbral el producto se considera sin precio vigente y no se ofrece.
