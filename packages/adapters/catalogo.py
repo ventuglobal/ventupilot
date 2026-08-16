@@ -5,19 +5,32 @@ por tabla. Es la pieza que convierte un prompt injection en un no-evento:
 aunque el modelo sea manipulado hasta llamar a esta tool con lo que sea, el
 rol con el que se ejecuta no tiene privilegio que escalar.
 
-De dónde sale el precio: de `pricing_productpriceresult.precio_final`, la
-salida del motor de precios de ventu 1.0 para un producto y un canal. El
-motor ya resolvió costo, markup, IVA, redondeo y campañas. Recalcularlo
-aquí sería reimplementarlo y divergir (invariante 1).
+**La fuente del catálogo es `base_productbase`**, no la tabla de precios. Eso
+importa: el motor de precios cubre una parte del catálogo (unos 11.6k de 20.4k
+productos con stock, repartidos en canales que se recalculan a ritmos muy
+distintos), así que colgar la búsqueda de un `JOIN` interno escondía dos de
+cada tres productos y hacía que el agente dijera "no tengo eso" sobre cosas que
+sí están en bodega.
 
-Qué se excluye del catálogo ofrecible, y por qué:
+El precio se adjunta con `LEFT JOIN`. Un producto sin precio vigente **se
+encuentra pero no se cotiza**: `precio_clp` viene en None y
+`construir_propuesta` rechaza cualquier SKU sin precio. Esa asimetría es
+deliberada — es preferible decir "lo tengo, el precio te lo confirma un
+ejecutivo" que callar que existe, y ambas cosas son mejores que inventarse
+una cifra.
+
+Por qué no se calcula el precio aquí: `ProductBase.marketplace_price` existe,
+pero es una propiedad de Python —costo + fulfillment + markup + IVA + comisión
+de MercadoLibre + redondeo— y no una columna. Reimplementarla en SQL sería
+duplicar el motor de precios y divergir de él (invariante 1), además de aplicar
+una fórmula pensada para publicar en ML a una cotización por WhatsApp.
+
+Qué se excluye del catálogo, y por qué:
 
 - `is_active = false` — el operador lo dio de baja.
 - `merged_into_id IS NOT NULL` — es una publicación hija reabsorbida bajo
   otra. Ofrecerla duplicaría el mismo producto con dos SKUs.
-- stock nulo o cero — no se cotiza lo que no se puede entregar.
-- `precio_final <= 0` — el motor no llegó a un precio válido.
-- cálculo rancio — un precio de hace semanas no es un precio.
+- stock nulo o cero — no se ofrece lo que no se puede entregar.
 """
 
 from __future__ import annotations
@@ -26,8 +39,14 @@ import asyncpg
 
 from packages.domain.catalogo import ProductoDisponible, ResultadoBusqueda
 
-# El join a marca es LEFT porque `brand` es nullable en ventu 1.0 y un
-# producto sin marca sigue siendo vendible.
+# El precio entra por LEFT JOIN, con canal y antigüedad en la condición del
+# JOIN y no en el WHERE: puesto en el WHERE, el LEFT JOIN se degrada a INNER y
+# volveríamos a esconder los productos sin precio.
+#
+# OJO con `p.clickbox_id`: `base_productbase` NO tiene columna `id`. Su primary
+# key es un UUID llamado `clickbox_id` (ver base.ProductBase en ventu 1.0).
+# Escribir `p.id` por costumbre de Django compila en la cabeza pero revienta en
+# ejecución, y solo cuando alguien busca algo.
 _SELECT = """
     SELECT p.sku,
            p.ventu_sku,
@@ -38,20 +57,16 @@ _SELECT = """
            r.channel            AS canal,
            r.calculated_at
       FROM public.base_productbase p
-      JOIN public.pricing_productpriceresult r
-        -- OJO: `base_productbase` NO tiene columna `id`. Su primary key es
-        -- `clickbox_id`, un UUID (ver base.ProductBase en ventu 1.0). Escribir
-        -- `p.id` por costumbre de Django compila en la cabeza pero revienta en
-        -- ejecución, y solo cuando alguien busca algo.
-        ON r.product_id = p.clickbox_id
-       AND r.channel = $1
       LEFT JOIN public.base_brand b
         ON b.id = p.brand_id
+      LEFT JOIN public.pricing_productpriceresult r
+        ON r.product_id = p.clickbox_id
+       AND r.channel = $1
+       AND r.precio_final > 0
+       AND r.calculated_at >= now() - make_interval(hours => $2)
      WHERE p.is_active
        AND p.merged_into_id IS NULL
        AND COALESCE(p.stock, 0) > 0
-       AND r.precio_final > 0
-       AND r.calculated_at >= now() - make_interval(hours => $2)
 """
 
 
@@ -77,7 +92,7 @@ class CatalogoRepo:
     async def buscar(
         self, texto: str, *, canal: str, max_edad_horas: int, limite: int
     ) -> ResultadoBusqueda:
-        """Busca productos ofrecibles por texto libre.
+        """Busca productos por texto libre en `base_productbase`.
 
         Es un ILIKE sobre título, SKU, SKU Ventu, modelo y part number. No es
         búsqueda semántica y no pretende serlo: en catálogo industrial el
@@ -85,9 +100,12 @@ class CatalogoRepo:
         cubre con latencia predecible. Si más adelante hace falta relevancia
         real, este es el único sitio que cambia.
 
+        Los que tienen precio vigente van primero: son los que se pueden
+        cotizar, y el modelo tiene un tope de resultados. Sin ese orden, un
+        recorte podría dejar fuera justo los ofrecibles.
+
         Se pide `limite + 1` para saber si hay más resultados sin pagar un
-        COUNT(*) sobre el catálogo entero. Que el modelo sepa que está viendo
-        un recorte cambia cómo redacta la respuesta.
+        COUNT(*) sobre el catálogo entero.
         """
         patron = f"%{texto.strip()}%"
         sql = (
@@ -98,7 +116,7 @@ class CatalogoRepo:
             OR p.ventu_sku ILIKE $3
             OR p.model ILIKE $3
             OR p.part_number ILIKE $3)
-     ORDER BY p.stock DESC, p.title
+     ORDER BY (r.precio_final IS NULL), p.stock DESC, p.title
      LIMIT $4
     """
         )
@@ -118,19 +136,22 @@ class CatalogoRepo:
     ) -> dict[str, tuple[str, int]]:
         """Resuelve `sku → (titulo, precio_unitario_clp)` para valorizar.
 
+        Solo devuelve los que tienen precio vigente: es la puerta por la que
+        `construir_propuesta` rechaza cotizar lo que no se puede cotizar.
+
         Se vuelve a consultar al construir la propuesta en vez de confiar en
         lo que el modelo vio durante la búsqueda. Entre una cosa y otra pueden
         pasar varios turnos y el motor de precios corre de forma continua:
         cotizar con el precio que el modelo recuerda sería cotizar un precio
         que ya no existe.
-
-        Un SKU ausente del resultado es un SKU sin precio vigente. El llamador
-        decide; `construir_propuesta` lanza.
         """
         if not skus:
             return {}
 
-        sql = _SELECT + "       AND p.sku = ANY($3::text[])"
+        sql = _SELECT + """
+       AND p.sku = ANY($3::text[])
+       AND r.precio_final IS NOT NULL
+    """
         async with self._pool.acquire() as conn:
             filas = await conn.fetch(sql, canal, max_edad_horas, skus)
 

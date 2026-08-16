@@ -34,12 +34,21 @@ class ProductoDisponible(BaseModel):
     stock: int = Field(ge=0)
     # Precio final con el que se cotiza, en CLP enteros. Sale del motor de
     # precios; el modelo nunca lo calcula ni lo ajusta (invariante 1).
-    precio_clp: int = Field(ge=0)
-    canal: str
-    # Cuándo lo calculó el motor. El backend descarta lo rancio antes de
-    # construir este objeto, pero se conserva para poder auditar una
+    #
+    # None significa "existe y hay stock, pero no tiene precio vigente en este
+    # canal". Ese producto se puede mencionar pero NO se puede cotizar:
+    # `construir_propuesta` rechaza cualquier SKU sin precio. Decirle al
+    # cliente "lo tengo, el precio te lo confirma un ejecutivo" es mejor que
+    # callar que existe, y las dos cosas son mejores que inventar una cifra.
+    precio_clp: int | None = Field(default=None, ge=0)
+    canal: str | None = None
+    # Cuándo lo calculó el motor. Se conserva para poder auditar una
     # cotización a posteriori.
-    precio_calculado_at: datetime
+    precio_calculado_at: datetime | None = None
+
+    @property
+    def cotizable(self) -> bool:
+        return self.precio_clp is not None
 
 
 class ResultadoBusqueda(BaseModel):
