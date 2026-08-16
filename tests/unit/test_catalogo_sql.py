@@ -104,12 +104,25 @@ def test_el_where_solo_filtra_el_producto():
 def test_los_cotizables_van_primero():
     """El modelo tiene tope de resultados: sin este orden, un recorte podría
     dejar fuera justo los que sí se pueden cotizar."""
-    import inspect
+    from packages.adapters.catalogo import _ENVOLTURA_BUSQUEDA  # noqa: PLC0415
 
-    from packages.adapters.catalogo import CatalogoRepo  # noqa: PLC0415
+    assert "ORDER BY (q.precio_final IS NULL)" in "".join(_ENVOLTURA_BUSQUEDA)
 
-    fuente = inspect.getsource(CatalogoRepo.buscar)
-    assert "ORDER BY (precio_final IS NULL)" in fuente
+
+def test_el_orden_califica_el_alias_con_la_subconsulta():
+    """Postgres solo admite un alias del SELECT en el ORDER BY si va suelto.
+
+    Dentro de una expresión lo resuelve contra las tablas de origen y falla en
+    ejecución con UndefinedColumn. Pasó en producción: el test anterior
+    comprobaba que el texto estuviera, no que el SQL fuera válido.
+    """
+    from packages.adapters.catalogo import _ENVOLTURA_BUSQUEDA  # noqa: PLC0415
+
+    envoltura = "".join(_ENVOLTURA_BUSQUEDA)
+    assert envoltura.startswith("SELECT * FROM (")
+    # El alias tiene que ir calificado por la subconsulta, nunca desnudo.
+    assert "(q.precio_final IS NULL)" in envoltura
+    assert "(precio_final IS NULL)" not in envoltura.replace("(q.precio_final IS NULL)", "")
 
 
 def test_valorizar_exige_precio():
