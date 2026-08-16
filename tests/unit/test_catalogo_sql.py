@@ -16,11 +16,17 @@ from __future__ import annotations
 
 import re
 
-from packages.adapters.catalogo import _SELECT
+from packages.adapters.catalogo import _SELECT_COSTO, _SELECT_MOTOR
+
 
 # Los comentarios `--` se quitan porque el propio SQL advierte sobre `p.id`;
 # comprobar el texto crudo daría un falso positivo contra la advertencia.
-_SQL = "\n".join(línea.split("--")[0] for línea in _SELECT.splitlines())
+def _sin_comentarios(sql: str) -> str:
+    return "\n".join(línea.split("--")[0] for línea in sql.splitlines())
+
+
+_SQL = _sin_comentarios(_SELECT_MOTOR)
+_SQL_COSTO = _sin_comentarios(_SELECT_COSTO)
 
 
 def test_el_join_usa_clickbox_id_y_no_id():
@@ -103,14 +109,50 @@ def test_los_cotizables_van_primero():
     from packages.adapters.catalogo import CatalogoRepo  # noqa: PLC0415
 
     fuente = inspect.getsource(CatalogoRepo.buscar)
-    assert "ORDER BY (r.precio_final IS NULL)" in fuente
+    assert "ORDER BY (precio_final IS NULL)" in fuente
 
 
 def test_valorizar_exige_precio():
     """`precios_por_sku` alimenta la cotización: no puede colar SKUs sin precio."""
-    import inspect
+    from packages.adapters.catalogo import _ENVOLTURA_SKUS  # noqa: PLC0415
 
-    from packages.adapters.catalogo import CatalogoRepo  # noqa: PLC0415
+    assert "q.precio_final IS NOT NULL" in "".join(_ENVOLTURA_SKUS)
 
-    fuente = inspect.getsource(CatalogoRepo.precios_por_sku)
-    assert "r.precio_final IS NOT NULL" in fuente
+
+# ── Precio derivado del costo ────────────────────────────────────────────────
+
+
+def test_el_costo_base_es_el_bruto():
+    """`costo_credito` (D3) es el bruto; `costo_contado` (D4) está etiquetado
+    NETO en ventu 1.0. No son bases intercambiables con el mismo factor."""
+    assert "p.costo_credito" in _SQL_COSTO
+    assert "CASE WHEN $1 = 'contado' THEN p.costo_contado ELSE p.costo_credito END" in _SQL_COSTO
+
+
+def test_el_factor_va_parametrizado_no_interpolado():
+    """El factor entra como parámetro enlazado, no concatenado en el SQL."""
+    assert "$2::numeric" in _SQL_COSTO
+    assert "1.4" not in _SQL_COSTO
+
+
+def test_el_precio_por_costo_es_entero():
+    """El peso chileno no tiene subdivisión; los decimales llegarían al cliente."""
+    assert "::bigint" in _SQL_COSTO
+
+
+def test_sin_costo_no_hay_precio():
+    """No se cae al otro costo: mezclaría bases neta y bruta en la misma
+    cotización. Sin el costo elegido, el producto se encuentra pero no se cotiza."""
+    assert "COALESCE(p.costo_credito, p.costo_contado)" not in _SQL_COSTO
+
+
+def test_el_precio_por_costo_no_depende_del_motor():
+    """Es el punto del modo: cubre productos que el motor no alcanzó a calcular."""
+    assert "pricing_productpriceresult" not in _SQL_COSTO
+
+
+def test_los_dos_modos_filtran_igual_el_producto():
+    """Cambiar de dónde sale el precio no debe cambiar qué productos existen."""
+    for condicion in ("p.is_active", "p.merged_into_id IS NULL", "COALESCE(p.stock, 0) > 0"):
+        assert condicion in _SQL
+        assert condicion in _SQL_COSTO

@@ -35,6 +35,8 @@ Qué se excluye del catálogo, y por qué:
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import asyncpg
 
 from packages.domain.catalogo import ProductoDisponible, ResultadoBusqueda
@@ -47,7 +49,7 @@ from packages.domain.catalogo import ProductoDisponible, ResultadoBusqueda
 # key es un UUID llamado `clickbox_id` (ver base.ProductBase en ventu 1.0).
 # Escribir `p.id` por costumbre de Django compila en la cabeza pero revienta en
 # ejecución, y solo cuando alguien busca algo.
-_SELECT = """
+_SELECT_MOTOR = """
     SELECT p.sku,
            p.ventu_sku,
            p.title              AS titulo,
@@ -69,6 +71,50 @@ _SELECT = """
        AND COALESCE(p.stock, 0) > 0
 """
 
+# Precio derivado del costo, sin pasar por el motor.
+#
+# `$1` es el nombre de la columna de costo y `$2` el factor. El nombre no se
+# interpola: se elige con un CASE sobre un valor que la config ya restringió a
+# dos literales, para que ninguna ruta pueda acabar concatenando texto en el
+# SQL.
+#
+# `round(...)::bigint` produce pesos enteros. El peso chileno no tiene
+# subdivisión en circulación y el resto del sistema trabaja en enteros; dejar
+# decimales aquí los arrastraría hasta el mensaje del cliente.
+#
+# Un producto sin ese costo queda con precio NULL: se encuentra pero no se
+# cotiza. No se cae al otro costo a propósito — `costo_contado` es NETO y
+# `costo_credito` bruto, así que aplicarles el mismo factor daría precios de
+# bases distintas mezclados en la misma cotización.
+_SELECT_COSTO = """
+    SELECT p.sku,
+           p.ventu_sku,
+           p.title              AS titulo,
+           b.name               AS marca,
+           COALESCE(p.stock, 0) AS stock,
+           round(
+             CASE WHEN $1 = 'contado' THEN p.costo_contado ELSE p.costo_credito END
+             * $2::numeric
+           )::bigint            AS precio_final,
+           $1::text             AS canal,
+           now()                AS calculated_at
+      FROM public.base_productbase p
+      LEFT JOIN public.base_brand b
+        ON b.id = p.brand_id
+     WHERE p.is_active
+       AND p.merged_into_id IS NULL
+       AND COALESCE(p.stock, 0) > 0
+"""
+
+
+# Envuelve cualquiera de las dos consultas base para filtrar por SKU y exigir
+# precio. Constantes para que la construcción del SQL no concatene nada que
+# venga de fuera.
+_ENVOLTURA_SKUS = (
+    "SELECT * FROM (",
+    "       AND p.sku = ANY($3::text[])) q WHERE q.precio_final IS NOT NULL",
+)
+
 
 def _a_producto(fila: asyncpg.Record) -> ProductoDisponible:
     return ProductoDisponible(
@@ -84,10 +130,31 @@ def _a_producto(fila: asyncpg.Record) -> ProductoDisponible:
 
 
 class CatalogoRepo:
-    """Lectura del catálogo. Recibe el pool de solo lectura."""
+    """Lectura del catálogo. Recibe el pool de solo lectura.
 
-    def __init__(self, pool_ro: asyncpg.Pool) -> None:
+    `origen` decide de dónde sale el precio: del motor de ventu 1.0 o del
+    costo por un factor. Los dos primeros parámetros de la consulta cambian de
+    significado según cuál sea, y por eso se resuelven juntos en `_base`.
+    """
+
+    def __init__(
+        self,
+        pool_ro: asyncpg.Pool,
+        *,
+        origen: str = "motor",
+        factor: Decimal = Decimal("1.4"),
+        costo: str = "credito",
+    ) -> None:
         self._pool = pool_ro
+        self._origen = origen
+        self._factor = factor
+        self._costo = costo
+
+    def _base(self, canal: str, max_edad_horas: int) -> tuple[str, object, object]:
+        """Devuelve (sql, $1, $2) según el origen del precio."""
+        if self._origen == "costo":
+            return _SELECT_COSTO, self._costo, self._factor
+        return _SELECT_MOTOR, canal, max_edad_horas
 
     async def buscar(
         self, texto: str, *, canal: str, max_edad_horas: int, limite: int
@@ -108,20 +175,21 @@ class CatalogoRepo:
         COUNT(*) sobre el catálogo entero.
         """
         patron = f"%{texto.strip()}%"
+        base, p1, p2 = self._base(canal, max_edad_horas)
         sql = (
-            _SELECT
+            base
             + """
        AND (p.title ILIKE $3
             OR p.sku ILIKE $3
             OR p.ventu_sku ILIKE $3
             OR p.model ILIKE $3
             OR p.part_number ILIKE $3)
-     ORDER BY (r.precio_final IS NULL), p.stock DESC, p.title
+     ORDER BY (precio_final IS NULL), p.stock DESC, p.title
      LIMIT $4
     """
         )
         async with self._pool.acquire() as conn:
-            filas = await conn.fetch(sql, canal, max_edad_horas, patron, limite + 1)
+            filas = await conn.fetch(sql, p1, p2, patron, limite + 1)
 
         truncado = len(filas) > limite
         productos = [_a_producto(f) for f in filas[:limite]]
@@ -148,11 +216,16 @@ class CatalogoRepo:
         if not skus:
             return {}
 
-        sql = _SELECT + """
-       AND p.sku = ANY($3::text[])
-       AND r.precio_final IS NOT NULL
-    """
+        base, p1, p2 = self._base(canal, max_edad_horas)
+        # Subconsulta porque con `precio_origen="costo"` el precio es una
+        # expresión calculada, y una expresión del SELECT no se puede
+        # referenciar desde el WHERE del mismo nivel.
+        #
+        # El noqa es seguro y no un atajo: `base` es una de las dos constantes
+        # de este módulo y el resto son literales. Todo lo que viene de fuera
+        # —costo, factor, SKUs— viaja como parámetro enlazado ($1..$3).
+        sql = _ENVOLTURA_SKUS[0] + base + _ENVOLTURA_SKUS[1]  # noqa: S608
         async with self._pool.acquire() as conn:
-            filas = await conn.fetch(sql, canal, max_edad_horas, skus)
+            filas = await conn.fetch(sql, p1, p2, skus)
 
         return {f["sku"]: (f["titulo"], f["precio_final"]) for f in filas}
