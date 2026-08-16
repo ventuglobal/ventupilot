@@ -117,3 +117,22 @@ def test_vencida_compara_contra_expira_at():
     )
     assert not p.vencida(AHORA + timedelta(minutes=29))
     assert p.vencida(AHORA + timedelta(minutes=30))
+
+
+def test_un_producto_sin_precio_no_es_cotizable():
+    """Existe y hay stock, pero no se puede poner una cifra en una cotización."""
+    from datetime import UTC, datetime
+
+    from packages.domain.catalogo import ProductoDisponible
+
+    sin_precio = ProductoDisponible(sku="S", titulo="T", stock=5)
+    con_precio = ProductoDisponible(
+        sku="S",
+        titulo="T",
+        stock=5,
+        precio_clp=1000,
+        canal="shopify",
+        precio_calculado_at=datetime.now(tz=UTC),
+    )
+    assert not sin_precio.cotizable
+    assert con_precio.cotizable

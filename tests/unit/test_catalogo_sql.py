@@ -61,3 +61,56 @@ def test_no_se_expone_costo_ni_margen_al_modelo():
     """El agente no negocia márgenes; esos datos no deben poder filtrarse."""
     for prohibido in ("r.costo", "r.margen_final", "p.costo_credito", "p.costo_contado"):
         assert prohibido not in _SQL
+
+
+# ── La búsqueda parte de base_productbase, no de los precios ─────────────────
+
+
+def test_el_precio_entra_por_left_join():
+    """El catálogo es base_productbase; el precio se adjunta si existe.
+
+    Con un JOIN interno, los ~9k productos con stock y sin precio calculado
+    desaparecían y el agente decía "no tengo eso" sobre cosas en bodega.
+    """
+    assert "LEFT JOIN public.pricing_productpriceresult" in _SQL
+
+
+def test_las_condiciones_de_precio_van_en_el_join_no_en_el_where():
+    """Puestas en el WHERE, el LEFT JOIN se degrada a INNER en silencio.
+
+    Es el error clásico y no da ningún síntoma: la consulta sigue siendo
+    válida y simplemente vuelve a esconder los productos sin precio.
+    """
+    join, _, where = _SQL.partition("WHERE")
+    for condicion in ("r.channel =", "r.precio_final > 0", "r.calculated_at >="):
+        assert condicion in join, f"{condicion} debe estar en el JOIN"
+        assert condicion not in where, f"{condicion} en el WHERE degrada el LEFT JOIN"
+
+
+def test_el_where_solo_filtra_el_producto():
+    """Lo que excluye productos es del producto, no de su precio."""
+    _, _, where = _SQL.partition("WHERE")
+    assert "p.is_active" in where
+    assert "p.merged_into_id IS NULL" in where
+    assert "COALESCE(p.stock, 0) > 0" in where
+
+
+def test_los_cotizables_van_primero():
+    """El modelo tiene tope de resultados: sin este orden, un recorte podría
+    dejar fuera justo los que sí se pueden cotizar."""
+    import inspect
+
+    from packages.adapters.catalogo import CatalogoRepo  # noqa: PLC0415
+
+    fuente = inspect.getsource(CatalogoRepo.buscar)
+    assert "ORDER BY (r.precio_final IS NULL)" in fuente
+
+
+def test_valorizar_exige_precio():
+    """`precios_por_sku` alimenta la cotización: no puede colar SKUs sin precio."""
+    import inspect
+
+    from packages.adapters.catalogo import CatalogoRepo  # noqa: PLC0415
+
+    fuente = inspect.getsource(CatalogoRepo.precios_por_sku)
+    assert "r.precio_final IS NOT NULL" in fuente
