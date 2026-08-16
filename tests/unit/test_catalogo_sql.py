@@ -169,3 +169,38 @@ def test_los_dos_modos_filtran_igual_el_producto():
     for condicion in ("p.is_active", "p.merged_into_id IS NULL", "COALESCE(p.stock, 0) > 0"):
         assert condicion in _SQL
         assert condicion in _SQL_COSTO
+
+
+# ── Índice de trigramas ──────────────────────────────────────────────────────
+
+
+def test_la_consulta_usa_la_expresion_compartida():
+    """Si la consulta y el índice divergen, el planificador ignora el índice.
+
+    No falla nada: simplemente vuelve el recorrido secuencial sobre 28k filas
+    y la búsqueda tarda segundos. Un fallo de rendimiento sin síntoma de error.
+    """
+    from packages.adapters.busqueda import EXPRESION_BUSQUEDA  # noqa: PLC0415
+    from packages.adapters.catalogo import _ENVOLTURA_BUSQUEDA  # noqa: PLC0415
+
+    assert EXPRESION_BUSQUEDA in "".join(_ENVOLTURA_BUSQUEDA)
+
+
+def test_la_expresion_del_indice_es_la_de_la_consulta_sin_alias():
+    """Lo único que las separa es el alias `p.` de la tabla."""
+    from packages.adapters.busqueda import (  # noqa: PLC0415
+        EXPRESION_BUSQUEDA,
+        EXPRESION_INDICE,
+    )
+
+    assert EXPRESION_INDICE == EXPRESION_BUSQUEDA.replace("p.", "")
+    assert "p." not in EXPRESION_INDICE
+
+
+def test_la_busqueda_cubre_los_cinco_campos():
+    """Reducirlos aceleraría, pero el cliente escribe el modelo tan a menudo
+    como el nombre."""
+    from packages.adapters.busqueda import EXPRESION_BUSQUEDA  # noqa: PLC0415
+
+    for campo in ("title", "sku", "ventu_sku", "model", "part_number"):
+        assert f"p.{campo}" in EXPRESION_BUSQUEDA

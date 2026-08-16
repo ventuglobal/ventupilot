@@ -39,6 +39,7 @@ from decimal import Decimal
 
 import asyncpg
 
+from packages.adapters.busqueda import EXPRESION_BUSQUEDA
 from packages.domain.catalogo import ProductoDisponible, ResultadoBusqueda
 
 # El precio entra por LEFT JOIN, con canal y antigüedad en la condición del
@@ -121,13 +122,12 @@ _ENVOLTURA_SKUS = (
 # donde no existe, y la consulta falla en ejecución con UndefinedColumn.
 _ENVOLTURA_BUSQUEDA = (
     "SELECT * FROM (",
-    """       AND (p.title ILIKE $3
-            OR p.sku ILIKE $3
-            OR p.ventu_sku ILIKE $3
-            OR p.model ILIKE $3
-            OR p.part_number ILIKE $3)) q
-     ORDER BY (q.precio_final IS NULL), q.stock DESC, q.titulo
-     LIMIT $4""",
+    # La expresión viene de `adapters.busqueda` y no se escribe aquí: tiene
+    # que coincidir byte a byte con la del índice de trigramas, o el
+    # planificador lo ignora y vuelve al recorrido secuencial en silencio.
+    f"       AND {EXPRESION_BUSQUEDA} ILIKE $3) q\n"
+    "     ORDER BY (q.precio_final IS NULL), q.stock DESC, q.titulo\n"
+    "     LIMIT $4",
 )
 
 
