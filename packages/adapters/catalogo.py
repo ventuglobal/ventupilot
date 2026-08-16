@@ -115,6 +115,21 @@ _ENVOLTURA_SKUS = (
     "       AND p.sku = ANY($3::text[])) q WHERE q.precio_final IS NOT NULL",
 )
 
+# Igual para la búsqueda. La subconsulta no es cosmética: Postgres solo admite
+# un alias del SELECT en el ORDER BY cuando va **suelto**. Dentro de una
+# expresión —`(precio_final IS NULL)`— lo resuelve contra las tablas de origen,
+# donde no existe, y la consulta falla en ejecución con UndefinedColumn.
+_ENVOLTURA_BUSQUEDA = (
+    "SELECT * FROM (",
+    """       AND (p.title ILIKE $3
+            OR p.sku ILIKE $3
+            OR p.ventu_sku ILIKE $3
+            OR p.model ILIKE $3
+            OR p.part_number ILIKE $3)) q
+     ORDER BY (q.precio_final IS NULL), q.stock DESC, q.titulo
+     LIMIT $4""",
+)
+
 
 def _a_producto(fila: asyncpg.Record) -> ProductoDisponible:
     return ProductoDisponible(
@@ -176,18 +191,7 @@ class CatalogoRepo:
         """
         patron = f"%{texto.strip()}%"
         base, p1, p2 = self._base(canal, max_edad_horas)
-        sql = (
-            base
-            + """
-       AND (p.title ILIKE $3
-            OR p.sku ILIKE $3
-            OR p.ventu_sku ILIKE $3
-            OR p.model ILIKE $3
-            OR p.part_number ILIKE $3)
-     ORDER BY (precio_final IS NULL), p.stock DESC, p.title
-     LIMIT $4
-    """
-        )
+        sql = _ENVOLTURA_BUSQUEDA[0] + base + _ENVOLTURA_BUSQUEDA[1]  # noqa: S608
         async with self._pool.acquire() as conn:
             filas = await conn.fetch(sql, p1, p2, patron, limite + 1)
 
