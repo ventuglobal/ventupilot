@@ -33,8 +33,13 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+import os
+import shutil
+import subprocess
+import sys
+import time
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -52,6 +57,10 @@ RUTA_LOGOUT = "/customer/user/logout"
 _CAMPO_USUARIO = 'form#form-login input[name="_username"]'
 _CAMPO_PASSWORD = 'form#form-login input[name="_password"]'  # noqa: S105 - selector CSS
 _BOTON_ENTRAR = 'form#form-login button[type="submit"], form#form-login #start_login'
+# Marcarlo hace que Symfony emita su token persistente. Es lo que permite
+# refrescar la sesión SIN navegador cuando caduca, que es la diferencia entre un
+# worker desatendido y uno que llama a una persona cada ocho horas.
+_CASILLA_RECORDARME = 'form#form-login input[name="_remember_me"]'
 
 # El error se pinta en un bloque de alerta de Oro. El selector va deliberadamente
 # ancho —por subcadena de clase, no por clase exacta— porque la plantilla de
@@ -151,6 +160,56 @@ def _solo_dueno(ruta: str, flags: int) -> int:
     return os.open(ruta, flags, 0o600)
 
 
+@contextmanager
+def _pantalla() -> Iterator[None]:
+    """Garantiza un DISPLAY donde abrir el navegador, levantando Xvfb si hace falta.
+
+    Es el mismo camino que usa el bot de boletas del SII en ventu 1.0
+    (`boleta_bot/auth.py::_pantalla`), y por la misma razón: hay logins que **no
+    pasan en headless** —los antibot lo detectan— pero sí con un navegador con
+    ventana. Xvfb fabrica esa ventana en un servidor sin monitor, así que la
+    renovación queda automática por el MISMO camino que ya sabemos que funciona,
+    sin depender de que haya una persona para abrirla.
+
+    En una Mac o si ya hay `DISPLAY`, no hace nada.
+    """
+    if sys.platform in ("darwin", "win32") or os.environ.get("DISPLAY"):
+        yield
+        return
+
+    if shutil.which("Xvfb") is None:
+        raise RuntimeError(
+            "No hay pantalla ni Xvfb, y el login de prisa.cl no pasa en headless. "
+            "Instala xvfb en la imagen, o corre con headless=True si el perfil "
+            "persistente ya trae sesión."
+        )
+
+    # El número sale del PID: dos procesos del mismo contenedor no se pisan y no
+    # hay que coordinar nada entre ellos.
+    numero = 90 + (os.getpid() % 9)
+    proceso = subprocess.Popen(  # noqa: S603 - binario fijo, sin entrada del usuario
+        ["Xvfb", f":{numero}", "-screen", "0", "1280x1024x24", "-nolisten", "tcp"],  # noqa: S607
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    previo = os.environ.get("DISPLAY")
+    os.environ["DISPLAY"] = f":{numero}"
+    time.sleep(1.5)  # margen para que Xvfb acepte conexiones
+    log.info("pantalla virtual Xvfb en :%s", numero)
+    try:
+        yield
+    finally:
+        if previo is None:
+            os.environ.pop("DISPLAY", None)
+        else:
+            os.environ["DISPLAY"] = previo
+        proceso.terminate()
+        try:
+            proceso.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # pragma: no cover
+            proceso.kill()
+
+
 @asynccontextmanager
 async def _navegador(
     *,
@@ -158,6 +217,7 @@ async def _navegador(
     proxy: str,
     args_chromium: tuple[str, ...],
     ejecutable: str,
+    perfil: Path | None = None,
 ) -> AsyncIterator[Any]:
     """Abre Chromium y cede un contexto ya configurado para prisa.cl.
 
@@ -166,6 +226,12 @@ async def _navegador(
     señal que mira el reCAPTCHA, y un navegador que dice estar en UTC pidiendo
     un sitio chileno puntúa peor—, y tenerlos duplicados es tenerlos distintos
     dentro de tres meses.
+
+    Con `perfil` se usa un contexto **persistente**: el directorio guarda las
+    cookies y el historial entre corridas, y eso es lo que hace que el reCAPTCHA
+    deje de tratar cada login como un visitante recién llegado. Es lo que hace
+    `prisa_b2b` en ventu 1.0, y la razón de que allí el headless funcione — pero
+    solo *después* de que un login con ventana haya sembrado el perfil.
     """
     try:
         from playwright.async_api import async_playwright
@@ -175,34 +241,58 @@ async def _navegador(
             "  uv sync --extra prisa && uv run playwright install chromium"
         ) from exc
 
-    lanzamiento: dict[str, Any] = {
+    opciones: dict[str, Any] = {
         "headless": headless,
         "args": ["--disable-dev-shm-usage", *args_chromium],
     }
     if proxy:
-        lanzamiento["proxy"] = {"server": proxy}
+        opciones["proxy"] = {"server": proxy}
     if ejecutable:
-        lanzamiento["executable_path"] = ejecutable
+        opciones["executable_path"] = ejecutable
 
-    async with async_playwright() as pw:
-        navegador = await pw.chromium.launch(**lanzamiento)
-        try:
-            yield await navegador.new_context(
-                locale="es-CL",
-                timezone_id="America/Santiago",
-            )
-        finally:
-            await navegador.close()
+    contexto_pantalla = _pantalla() if not headless else _sin_pantalla()
+    with contexto_pantalla:
+        async with async_playwright() as pw:
+            if perfil is not None:
+                perfil.mkdir(parents=True, exist_ok=True)
+                contexto = await pw.chromium.launch_persistent_context(
+                    str(perfil),
+                    locale="es-CL",
+                    timezone_id="America/Santiago",
+                    viewport={"width": 1280, "height": 800},
+                    **opciones,
+                )
+                try:
+                    yield contexto
+                finally:
+                    await contexto.close()
+                return
+
+            navegador = await pw.chromium.launch(**opciones)
+            try:
+                yield await navegador.new_context(
+                    locale="es-CL",
+                    timezone_id="America/Santiago",
+                )
+            finally:
+                await navegador.close()
+
+
+@contextmanager
+def _sin_pantalla() -> Iterator[None]:
+    """En headless no hace falta pantalla. Existe para no ramificar el `with`."""
+    yield
 
 
 async def iniciar_sesion(
     credenciales: Credenciales,
     *,
     base_url: str = BASE_URL,
-    headless: bool = True,
+    headless: bool = False,
     proxy: str = "",
     args_chromium: tuple[str, ...] = (),
     ejecutable: str = "",
+    perfil: Path | None = None,
     timeout_ms: int = 45_000,
 ) -> Sesion:
     """Entra en prisa.cl con un navegador y devuelve las cookies resultantes.
@@ -211,8 +301,14 @@ async def iniciar_sesion(
         credenciales: RUT o correo, y contraseña.
         base_url: raíz del sitio. Parametrizada para poder apuntar a un entorno
             de pruebas sin tocar el código.
-        headless: False abre ventana. Útil para ver qué pasa cuando el sitio
-            cambia el formulario.
+        headless: **False por defecto**, y no es un descuido. El login no pasa
+            en headless —lo mismo que le ocurre al bot de boletas del SII en
+            ventu 1.0—, así que se abre con ventana y, en un servidor sin
+            monitor, sobre una Xvfb que se levanta sola. Ponerlo en True solo
+            tiene sentido con un `perfil` que ya traiga sesión.
+        perfil: directorio de perfil persistente de Chromium. Guarda cookies e
+            historial entre corridas, que es lo que hace que el reCAPTCHA deje
+            de tratar cada login como un visitante recién llegado.
         proxy: proxy de salida, p. ej. un residencial chileno. Vacío = directo.
         args_chromium: banderas extra para Chromium. Existe por los entornos
             con proxy que rompe TLS; ver PRISA.md.
@@ -228,15 +324,27 @@ async def iniciar_sesion(
         RuntimeError: si Playwright no está instalado.
     """
     async with _navegador(
-        headless=headless, proxy=proxy, args_chromium=args_chromium, ejecutable=ejecutable
+        headless=headless,
+        proxy=proxy,
+        args_chromium=args_chromium,
+        ejecutable=ejecutable,
+        perfil=perfil,
     ) as contexto:
-        pagina = await contexto.new_page()
+        paginas = getattr(contexto, "pages", [])
+        pagina = paginas[0] if paginas else await contexto.new_page()
         pagina.set_default_timeout(timeout_ms)
 
         # `domcontentloaded` y no `networkidle`: la home carga analítica y
         # widgets que no callan nunca, y esperar a que lo hagan es esperar
         # al timeout.
         await pagina.goto(f"{base_url}{RUTA_LOGIN}", wait_until="domcontentloaded")
+
+        # Con perfil persistente puede que ya estemos dentro: el login más barato
+        # es el que no se hace, y además no gasta reputación frente al reCAPTCHA.
+        if await _esta_autenticado(pagina):
+            cookies = {c["name"]: c["value"] for c in await contexto.cookies()}
+            log.info("el perfil ya traía sesión de prisa.cl")
+            return Sesion(cookies=cookies)
 
         # El reCAPTCHA invisible necesita haberse inicializado antes del envío.
         # Sin esta espera el POST sale sin el token —que Prisa manda en un campo
@@ -246,6 +354,7 @@ async def iniciar_sesion(
 
         await pagina.fill(_CAMPO_USUARIO, credenciales.usuario)
         await pagina.fill(_CAMPO_PASSWORD, credenciales.password)
+        await _marcar_recordarme(pagina)
         await pagina.click(_BOTON_ENTRAR)
 
         # Oro envía el login por AJAX y redirige después con JavaScript, así que
@@ -264,6 +373,13 @@ async def iniciar_sesion(
                 f"prisa.cl no autenticó a {_enmascarar(credenciales.usuario)}"
                 + (f": {aviso}" if aviso else ""),
                 mensaje_sitio=aviso,
+            )
+
+        if not any("remember" in nombre.lower() for nombre in cookies):
+            # Sin este token, cada caducidad exige otro navegador. Se avisa en
+            # vez de fallar: la sesión sirve igual, solo dura menos.
+            log.warning(
+                "no vino token persistente: la sesión no se podrá refrescar sin navegador"
             )
 
         log.info("sesión de prisa.cl iniciada para %s", _enmascarar(credenciales.usuario))
@@ -330,6 +446,30 @@ async def iniciar_sesion_manual(
         raise ErrorLoginPrisa(
             f"pasaron {espera_max_s}s sin que se completara el login en el navegador"
         )
+
+
+async def _marcar_recordarme(pagina: Any) -> None:
+    """Marca «Recordarme», que es lo que da el token persistente de Symfony.
+
+    La casilla suele estar oculta detrás de un `<label>` estilizado, así que un
+    `check()` normal falla por no ser visible. Se fuerza y, si aun así no toma,
+    se marca por JS disparando el `change` a mano — sin él, el JS de la página
+    no se entera y el formulario viaja sin la casilla.
+    """
+    try:
+        casilla = pagina.locator(_CASILLA_RECORDARME).first
+        if await casilla.count() == 0:
+            return
+        try:
+            await casilla.check(timeout=3_000, force=True)
+        except Exception:  # noqa: BLE001 - se reintenta por JS
+            await pagina.eval_on_selector(
+                _CASILLA_RECORDARME,
+                "el => { el.checked = true;"
+                " el.dispatchEvent(new Event('change', {bubbles: true})); }",
+            )
+    except Exception as exc:  # noqa: BLE001 - no vale la pena abortar el login
+        log.debug("no se pudo marcar «recordarme»: %s", exc)
 
 
 async def _esta_autenticado(pagina: Any) -> bool:

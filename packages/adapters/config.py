@@ -184,6 +184,10 @@ class PrisaSettings(BaseSettings):
     prisa_proxy: str = ""
     # Chromium ya instalado, para imágenes que traen el suyo.
     prisa_chromium_path: str = ""
+    # Perfil persistente del navegador. Guarda cookies e historial entre
+    # corridas, que es lo que hace que el reCAPTCHA deje de tratar cada login
+    # como un visitante recién llegado. Vacío = navegador limpio cada vez.
+    prisa_perfil_path: str = ".prisa-perfil"
 
 
 @lru_cache

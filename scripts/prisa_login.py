@@ -97,8 +97,9 @@ async def entrar(args: argparse.Namespace) -> int:
         else:
             sesion = await iniciar_sesion(
                 credenciales,
-                headless=not args.ver,
+                headless=args.headless,
                 base_url=cfg.prisa_base_url,
+                perfil=Path(cfg.prisa_perfil_path) if cfg.prisa_perfil_path else None,
                 proxy=cfg.prisa_proxy,
                 args_chromium=extra,
                 ejecutable=cfg.prisa_chromium_path,
@@ -143,7 +144,10 @@ async def entrar(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Inicia sesión en prisa.cl")
     parser.add_argument(
-        "--ver", action="store_true", help="abre el navegador con ventana"
+        "--headless",
+        action="store_true",
+        help="sin ventana. Solo funciona si el perfil ya trae sesión: el login "
+        "de prisa.cl no pasa en headless desde cero",
     )
     parser.add_argument(
         "--forzar", action="store_true", help="entra aunque haya sesión guardada válida"

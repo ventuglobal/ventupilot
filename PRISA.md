@@ -199,6 +199,60 @@ llamada.
 | aparece un reto visual de reCAPTCHA | reputación de la IP — ver abajo |
 | `ERR_CONNECTION_RESET` en Chromium | un proxy que retermina TLS no traga el ClientHello post-cuántico. `--arg=--ssl-version-max=tls1.2` |
 
+## Ya existe esto en ventu 1.0
+
+**Antes de tocar nada aquí, mira `prisa_b2b/` y `base/enrichment/prisa_client.py`
+en el repo `ventuglobal/ventu`.** Resuelven las mismas tres barreras, y además:
+
+- `PrisaClient.verify_b2b()` — canario de precios que distingue una sesión B2B
+  real de una anónima. Es mejor señal que buscar el enlace de salir: el WAF
+  sirve catálogo anónimo con precios anónimos a una sesión caducada, y eso se
+  escribiría como si fuera costo de proveedor.
+- `prisa_b2b/auth.py::get_session()` — escalera cookies → login HTTP → navegador.
+- `base.cookiejar` — las cookies viven en la BD, no en disco, porque en Railway
+  el disco se borra en cada deploy.
+
+Lo de este repo se escribió sin saber que aquello existía. Si esto va a
+convivir con ventu 1.0, lo sensato es leer el cookiejar compartido en vez de
+mantener dos logins.
+
+## Por qué el login automático se abre con ventana
+
+Es el mismo camino que el bot de boletas del SII en ventu 1.0
+(`boleta_bot/auth.py::_pantalla`), y por la misma razón.
+
+El intento de login del SII por HTTP puro está **descartado** allí —
+`boleta_bot/login_http.py` se conserva "por lo que enseña, no por lo que hace".
+Lo que sí funciona es abrir el navegador **con ventana** sobre una pantalla
+virtual **Xvfb** que el propio proceso levanta. Queda automático, sin persona
+delante, por el mismo camino que ya se sabe que anda.
+
+Aquí igual: `headless=False` es el valor por defecto de `iniciar_sesion`, y en
+un servidor sin monitor se levanta Xvfb solo. Hace falta el paquete en la
+imagen:
+
+```json
+{ "deploy": { "aptPackages": ["xvfb"] } }
+```
+
+`--headless` existe, pero solo sirve **con un perfil que ya traiga sesión**: el
+login desde cero no pasa sin ventana.
+
+### Perfil persistente y «Recordarme»
+
+Dos cosas hacen que esto aguante desatendido:
+
+- **`PRISA_PERFIL_PATH`** — perfil de Chromium que guarda cookies e historial
+  entre corridas. Es lo que hace que el reCAPTCHA deje de tratar cada login como
+  un visitante recién llegado, y por lo que en ventu 1.0 el headless funciona
+  *después* de que un login con ventana haya sembrado el perfil.
+- **«Recordarme»** se marca siempre. Es lo que hace que Symfony emita su token
+  persistente, y ese token es la diferencia entre refrescar la sesión sin
+  navegador y llamar a una persona cada ocho horas. La casilla está oculta tras
+  un `<label>` estilizado, así que se fuerza y, si no toma, se marca por JS con
+  su evento `change`. Si no llega el token, se avisa en el log en vez de fallar:
+  la sesión sirve igual, solo dura menos.
+
 ## Los listados no están en el HTML
 
 Esto cuesta una tarde si se descubre por las malas. `/product/search?search=resma`
