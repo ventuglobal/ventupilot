@@ -12,7 +12,13 @@ Existe para responder dos preguntas que un `status_code` no responde:
 Uso:
 
     uv run python -m scripts.prisa_ver /customer/order/
+    uv run python -m scripts.prisa_ver /customer/order/ --estructura
     uv run python -m scripts.prisa_ver /customer/order/ --guardar pedidos.html
+
+Entrecomilla la ruta si lleva `?`: zsh la trata como patron de fichero y
+responde "no matches found" antes de que este script llegue a ejecutarse.
+
+    uv run python -m scripts.prisa_ver '/product/search?search=resma'
 
 Guardar el HTML permite iterar sobre el parser sin volver a pedirle nada al
 sitio, que es más rápido y más educado con Prisa.
@@ -31,8 +37,17 @@ from packages.adapters.prisa import ClientePrisa, Sesion
 from packages.adapters.prisa.sesion import RUTA_LOGIN, RUTA_LOGOUT
 
 _RE_TITULO = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
+# OroCommerce pinta sus listados con datagrids de JavaScript, no con <table>.
+# Estos son los rastros que deja en el HTML y que dicen dónde está el JSON.
+_RE_GRID_NOMBRE = re.compile(r'["\']gridName["\']\s*:\s*["\']([\w-]+)["\']')
+_RE_GRID_URL = re.compile(r'(/datagrid/[\w/-]+|/api/rest/[\w/-]+|/ajax/[\w/-]+)')
+_RE_COMPONENTE = re.compile(r'data-page-component-module=["\']([^"\']+)["\']')
 _RE_TABLA = re.compile(r"<table", re.I)
 _RE_ETIQUETAS = re.compile(r"<[^>]+>")
+# Se quitan enteros, contenido incluido. En una página de Oro el JavaScript es
+# el 95% de los bytes —analítica, New Relic, el bundle de la tienda—, así que
+# sin esto "el texto" son mil líneas de bundle y ni rastro de lo que se busca.
+_RE_NO_TEXTO = re.compile(r"<(script|style|noscript|template)\b.*?</\1>", re.S | re.I)
 _RE_ESPACIOS = re.compile(r"\s+")
 
 
@@ -77,11 +92,53 @@ async def ver(args: argparse.Namespace) -> int:
         destino.write_text(html, encoding="utf-8")
         print(f"guardado    {destino}")
 
+    if args.estructura:
+        _estructura(html)
+
     if args.texto:
         print("\n--- texto ---")
-        print(_limpiar(_RE_ETIQUETAS.sub(" ", html))[: args.texto])
+        print(_texto_visible(html)[: args.texto])
 
     return 0 if autenticado else 1
+
+
+def _estructura(html: str) -> None:
+    """Dice de dónde saldrían los datos, sin imprimir ninguno.
+
+    Un listado de OroCommerce no está en el HTML: lo pinta un datagrid de
+    JavaScript que pide el contenido aparte. Por eso `tablas 0` en una página
+    que a ojo tiene una tabla — y por eso no sirve de nada buscar `<tr>`.
+
+    Lo que interesa es el nombre de la rejilla y la URL que consulta: con eso
+    se le puede pedir el JSON directamente a `httpx`, que es mucho más barato
+    que levantar un navegador para leer el DOM ya pintado.
+
+    Solo se imprimen nombres y rutas, nunca valores: esta salida se pega en un
+    chat o en un issue, y los datos de la cuenta no tienen por qué viajar ahí.
+    """
+    print("\n--- de dónde saldrían los datos ---")
+
+    rejillas = sorted(set(_RE_GRID_NOMBRE.findall(html)))
+    print(f"rejillas    {', '.join(rejillas) if rejillas else '(ninguna)'}")
+
+    urls = sorted({u for u in _RE_GRID_URL.findall(html) if len(u) < 120})
+    print(f"endpoints   {len(urls)}")
+    for url in urls[:12]:
+        print(f"            {url}")
+    if len(urls) > 12:
+        print(f"            … y {len(urls) - 12} más")
+
+    componentes = sorted(set(_RE_COMPONENTE.findall(html)))
+    print(f"componentes {len(componentes)}")
+    for comp in componentes[:8]:
+        print(f"            {comp}")
+
+    print(f"filas <tr>  {len(re.findall(r'<tr', html, re.I))}")
+
+
+def _texto_visible(html: str) -> str:
+    """El texto que leería una persona, sin el JavaScript de por medio."""
+    return _limpiar(_RE_ETIQUETAS.sub(" ", _RE_NO_TEXTO.sub(" ", html)))
 
 
 def _limpiar(texto: str) -> str:
@@ -92,6 +149,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Trae una página de prisa.cl")
     parser.add_argument("ruta", nargs="?", default="/customer/order/")
     parser.add_argument("--guardar", help="vuelca el HTML a un fichero")
+    parser.add_argument(
+        "--estructura",
+        action="store_true",
+        help="dice de dónde saldrían los datos (nombres y rutas, ningún valor)",
+    )
     parser.add_argument(
         "--texto",
         nargs="?",
