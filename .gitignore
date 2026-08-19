@@ -12,3 +12,6 @@ build/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Cookies de sesión de prisa.cl: equivalen a la contraseña mientras duran.
+.prisa-sesion.json
