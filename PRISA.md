@@ -83,12 +83,31 @@ iniciar_sesion()  ──▶  Chromium  ──▶  cookies  ──▶  ClientePri
 ```bash
 uv sync --extra prisa
 uv run playwright install chromium
+```
 
-export PRISA_USUARIO="12345678-9"     # RUT con guion, o correo
-export PRISA_PASSWORD="..."
+Las credenciales van en `.env`, en la raíz del repo:
 
+```
+PRISA_USUARIO=12345678-9        # RUT con guion, o correo
+PRISA_PASSWORD=tu$clave!real
+```
+
+Y luego:
+
+```bash
 uv run python -m scripts.prisa_login
 ```
+
+**En `.env` y no con `export`.** No es solo convención: dentro de comillas
+dobles el shell expande `$` y `!`, así que `export PRISA_PASSWORD="clave$x!"`
+guarda otra cosa, y prisa.cl responde «los datos ingresados son incorrectos» —
+un mensaje que apunta al sitio equivocado y cuesta un rato descartar. En el
+fichero no hay expansión que valga. Si aun así prefieres exportar, comillas
+simples.
+
+Cuando el login se rechaza, el comando imprime **cuántos caracteres tenía la
+contraseña que envió**. Si ese número no es el que esperas, el problema está en
+cómo llegó la variable, no en la cuenta.
 
 El comando entra, guarda las cookies en `.prisa-sesion.json` con permisos `0600`
 y comprueba que la sesión se puede reutilizar desde `httpx`. Si ya hay una
@@ -107,10 +126,7 @@ python3.12 -m venv .venv            # el proyecto pide Python >= 3.12
 pip install -e ".[prisa]"
 playwright install chromium
 
-export PRISA_USUARIO="12345678-9"
-export PRISA_PASSWORD="..."
-
-python -m scripts.prisa_login
+python -m scripts.prisa_login       # las credenciales, en .env
 ```
 
 `python3.12` y no `python3`: si el `python3` del sistema es 3.11 o anterior,
@@ -129,8 +145,8 @@ Opciones útiles:
 | `--forzar` | entra aunque la sesión guardada siga siendo válida |
 | `--arg=...` | bandera extra para Chromium, repetible |
 
-La contraseña se lee del entorno y nunca de un argumento: `ps` y el historial
-del shell son públicos dentro de la máquina.
+La contraseña nunca se pasa por argumento: `ps` y el historial del shell son
+públicos dentro de la máquina.
 
 En código:
 
@@ -156,7 +172,7 @@ llamada.
 | `no supe resolver` | mismo caso, pero la forma del script ya no encaja con los regex |
 | «no autenticó» sin mensaje del sitio | el formulario cambió: corre con `--ver` y mira |
 | «tu cuenta ha sido deshabilitada» | es del lado de Prisa, no del código |
-| «los datos ingresados son incorrectos» | credencial, no código. Verifica `echo "${#PRISA_PASSWORD} caracteres"`: el shell se come `$` y `!` dentro de comillas dobles |
+| «los datos ingresados son incorrectos» | credencial, no código. Mira el recuento de caracteres que imprime el propio comando: si no cuadra, el shell mordió la clave — pásala por `.env` |
 | aparece un reto visual de reCAPTCHA | reputación de la IP — ver abajo |
 | `ERR_CONNECTION_RESET` en Chromium | un proxy que retermina TLS no traga el ClientHello post-cuántico. `--arg=--ssl-version-max=tls1.2` |
 

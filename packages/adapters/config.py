@@ -149,3 +149,43 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
+
+
+class PrisaSettings(BaseSettings):
+    """Credenciales y opciones del portal de prisa.cl.
+
+    Separada de `Settings` a propósito: aquella exige lo del agente de WhatsApp
+    —`wa_app_secret`, `database_url`, el pepper— y entrar en prisa.cl no
+    necesita nada de eso. Fundirlas obligaría a tener toda la configuración del
+    worker montada para poder correr un login.
+
+    Lee `.env` además del entorno, como el resto del proyecto. Eso no es solo
+    consistencia: `export PRISA_PASSWORD="clave$con!signos"` deja que el shell
+    se coma el `$` y el `!` y guarda otra cosa, y el síntoma —«los datos
+    ingresados son incorrectos»— apunta al sitio en vez de al shell. En el
+    fichero no hay expansión que valga.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
+    # RUT con guion y dígito verificador (`12345678-9`) o correo: el formulario
+    # acepta ambos.
+    prisa_usuario: str = ""
+    prisa_password: str = ""
+
+    prisa_base_url: str = "https://www.prisa.cl"
+    # Dónde se guardan las cookies. Valen lo mismo que la contraseña mientras
+    # duran, así que el fichero se crea con permisos 0600.
+    prisa_sesion_path: str = ".prisa-sesion.json"
+    # Proxy de salida del navegador. Vacío = directo. Se usa si el reCAPTCHA
+    # empieza a levantar retos, que depende de la reputación de la IP.
+    prisa_proxy: str = ""
+    # Chromium ya instalado, para imágenes que traen el suyo.
+    prisa_chromium_path: str = ""
+
+
+@lru_cache
+def get_prisa_settings() -> PrisaSettings:
+    return PrisaSettings()

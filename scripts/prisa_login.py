@@ -6,31 +6,30 @@ desafío del WAF, o apuntando a `login_check` en vez de `login-check`, el sitio
 devuelve 200 con HTML que no es el que se pidió, y el error aparece varias
 capas más abajo como "no encuentro el campo". Aquí cada barrera se nombra.
 
-Uso:
+Uso: pon las credenciales en `.env` y corre
 
-    export PRISA_USUARIO="12345678-9"      # RUT con guion, o correo
-    export PRISA_PASSWORD="..."
     uv run python -m scripts.prisa_login
 
     # Ver el navegador mientras lo hace (para depurar cambios del formulario):
     uv run python -m scripts.prisa_login --ver
 
-    # A través de un proxy residencial chileno:
-    PRISA_PROXY="http://usuario:clave@proxy.apify.com:8000" \\
-        uv run python -m scripts.prisa_login
+`.env` antes que `export`, y no es solo por seguir la convención del proyecto:
+`export PRISA_PASSWORD="clave$con!signos"` deja que el shell se coma el `$` y
+el `!`, y el sitio responde «los datos ingresados son incorrectos», que apunta
+al sitio equivocado. En el fichero no hay expansión. Si prefieres exportar, usa
+comillas simples.
 
-La contraseña se lee del entorno y nunca de un argumento: `ps` y el historial
-del shell son públicos dentro de la máquina.
+Nunca por argumento: `ps` y el historial del shell son públicos en la máquina.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
 
+from packages.adapters.config import get_prisa_settings
 from packages.adapters.prisa import (
     ClientePrisa,
     Credenciales,
@@ -39,25 +38,28 @@ from packages.adapters.prisa import (
     iniciar_sesion,
 )
 
-RUTA_SESION_POR_DEFECTO = ".prisa-sesion.json"
-
 
 async def entrar(args: argparse.Namespace) -> int:
+    cfg = get_prisa_settings()
     try:
         credenciales = Credenciales(
-            usuario=os.environ.get("PRISA_USUARIO", ""),
-            password=os.environ.get("PRISA_PASSWORD", ""),
+            usuario=cfg.prisa_usuario, password=cfg.prisa_password
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        print(
+            "defínelos en .env (recomendado: el shell no expande nada ahí)"
+            " o expórtalos con comillas simples",
+            file=sys.stderr,
+        )
         return 2
 
-    ruta = Path(os.environ.get("PRISA_SESION_PATH", RUTA_SESION_POR_DEFECTO))
+    ruta = Path(cfg.prisa_sesion_path)
 
     if not args.forzar:
         guardada = Sesion.cargar(ruta)
         if guardada is not None and not guardada.caducada():
-            cliente = ClientePrisa(guardada)
+            cliente = ClientePrisa(guardada, base_url=cfg.prisa_base_url)
             try:
                 if await cliente.esta_viva():
                     print(f"sesión de {ruta} sigue viva ({len(guardada.cookies)} cookies)")
@@ -78,14 +80,25 @@ async def entrar(args: argparse.Namespace) -> int:
         sesion = await iniciar_sesion(
             credenciales,
             headless=not args.ver,
-            proxy=os.environ.get("PRISA_PROXY", ""),
+            base_url=cfg.prisa_base_url,
+            proxy=cfg.prisa_proxy,
             args_chromium=extra,
-            ejecutable=os.environ.get("PRISA_CHROMIUM_PATH", ""),
+            ejecutable=cfg.prisa_chromium_path,
         )
     except ErrorLoginPrisa as exc:
         print(f"login rechazado: {exc}", file=sys.stderr)
         if exc.mensaje_sitio:
             print(f"  prisa.cl dijo: {exc.mensaje_sitio}", file=sys.stderr)
+        # Lo que de verdad hay que descartar antes de dudar de la cuenta es que
+        # el shell haya mordido la contraseña. La longitud lo delata sin
+        # imprimirla, y así no hace falta que nadie la escriba en otro sitio
+        # para comprobarlo.
+        print(
+            f"  se envió usuario {cfg.prisa_usuario!r} con una contraseña de "
+            f"{len(cfg.prisa_password)} caracteres — si ese número no es el que "
+            "esperas, el shell se comió parte: usa .env o comillas simples",
+            file=sys.stderr,
+        )
         return 1
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -94,7 +107,7 @@ async def entrar(args: argparse.Namespace) -> int:
     sesion.guardar(ruta)
     print(f"dentro. {len(sesion.cookies)} cookies guardadas en {ruta} (0600)")
 
-    cliente = ClientePrisa(sesion)
+    cliente = ClientePrisa(sesion, base_url=cfg.prisa_base_url)
     try:
         print("comprobando con httpx…", flush=True)
         print("sesión reutilizable:", "sí" if await cliente.esta_viva() else "no")
