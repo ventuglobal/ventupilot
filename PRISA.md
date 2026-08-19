@@ -199,6 +199,58 @@ llamada.
 | aparece un reto visual de reCAPTCHA | reputación de la IP — ver abajo |
 | `ERR_CONNECTION_RESET` en Chromium | un proxy que retermina TLS no traga el ClientHello post-cuántico. `--arg=--ssl-version-max=tls1.2` |
 
+## Los listados no están en el HTML
+
+Esto cuesta una tarde si se descubre por las malas. `/product/search?search=resma`
+devuelve 2,5 MB y **ni una resma**: bolígrafos, cafeteras e insecticidas, la
+misma lista salga la búsqueda que salga. Es un carrusel de recomendados. Un
+parser sobre esa página estaría leyendo recomendaciones y llamándolo catálogo.
+
+Los resultados los pinta un **datagrid de JavaScript** que pide el contenido
+aparte. `--estructura` saca su nombre:
+
+```bash
+uv run python -m scripts.prisa_ver '/product/search?search=resma' --estructura
+#   rejillas    frontend-product-search-grid
+```
+
+Y a esa rejilla se le puede preguntar directamente, sin navegador:
+
+```bash
+uv run python -m scripts.prisa_ver \
+  '/datagrid/frontend-product-search-grid?gridName=frontend-product-search-grid' --ajax
+```
+
+**La cabecera `X-Requested-With` es obligatoria** —es lo que hace `--ajax`—. Sin
+ella Oro devuelve la página entera en vez de las filas, y el síntoma, 2 MB de
+HTML donde se esperaba JSON, se lee como «este endpoint no sirve» cuando lo
+único que faltaba era una cabecera.
+
+Lo que hay dentro, medido contra la cuenta real: **9.888 productos**, 20 por
+página, con estas columnas entre otras:
+
+```
+name  brand  private_label_sku  prices  minimal_price  has_price
+availability  low_inventory  image  product_detail  chilecompraId
+```
+
+Es decir, el catálogo del proveedor con los precios de la cuenta, en JSON
+limpio. Paginación al estilo Oro:
+
+```
+&frontend-product-search-grid[_pager][_per_page]=100
+&frontend-product-search-grid[_pager][_page]=2
+```
+
+**Pendiente:** filtrar. Pasar el término como `[_filter][all_text][value]`
+devolvió los 9.888 igualmente, así que Oro lo ignoró — el nombre del filtro es
+otro, o la búsqueda entra por un parámetro suelto. Quien lo retome: compare el
+`total` con y sin filtro, que es la forma rápida de saber si se está aplicando.
+
+`--ajax` describe la respuesta sin volcarla —cuántas filas, qué columnas,
+cuántos registros— porque esas filas son los precios negociados de la cuenta y
+esa salida se acaba pegando en un chat o en un issue.
+
 ## Apify
 
 La idea original era usar el [MCP de Apify] para este login. Conviene tener
