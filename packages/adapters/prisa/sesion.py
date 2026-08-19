@@ -367,7 +367,7 @@ async def iniciar_sesion(
 
         await pagina.fill(_CAMPO_USUARIO, credenciales.usuario)
         await pagina.fill(_CAMPO_PASSWORD, credenciales.password)
-        await _marcar_recordarme(pagina)
+        recordarme = await _marcar_recordarme(pagina)
         await pagina.click(_BOTON_ENTRAR)
 
         entro = await _esperar_autenticado(pagina, segundos=espera_login_s)
@@ -392,11 +392,16 @@ async def iniciar_sesion(
                 captura=foto,
             )
 
-        if not any("remember" in nombre.lower() for nombre in cookies):
+        if not _token_persistente(cookies):
             # Sin este token, cada caducidad exige otro navegador. Se avisa en
-            # vez de fallar: la sesión sirve igual, solo dura menos.
+            # vez de fallar: la sesión sirve igual, solo dura menos. El estado
+            # de la casilla va en el aviso porque separa las dos causas: o no se
+            # marcó (se arregla aquí) o Prisa no emite el token (no se arregla).
             log.warning(
-                "no vino token persistente: la sesión no se podrá refrescar sin navegador"
+                "no vino token persistente (casilla marcada: %s): la sesión no se "
+                "podrá refrescar sin navegador. Cookies: %s",
+                recordarme,
+                ", ".join(sorted(cookies)),
             )
 
         log.info("sesión de prisa.cl iniciada para %s", _enmascarar(credenciales.usuario))
@@ -500,18 +505,28 @@ async def _fotografiar(pagina: Any, destino: Path | None) -> Path | None:
     return destino
 
 
-async def _marcar_recordarme(pagina: Any) -> None:
-    """Marca «Recordarme», que es lo que da el token persistente de Symfony.
+async def _marcar_recordarme(pagina: Any) -> bool:
+    """Marca «Recordarme» y devuelve si quedó marcada de verdad.
+
+    En el sitio se llama «No cerrar sesión». Es lo que hace que Symfony emita su
+    token persistente, y ese token es la diferencia entre refrescar la sesión sin
+    navegador y tener que abrir uno cada vez que caduca.
 
     La casilla suele estar oculta detrás de un `<label>` estilizado, así que un
     `check()` normal falla por no ser visible. Se fuerza y, si aun así no toma,
-    se marca por JS disparando el `change` a mano — sin él, el JS de la página
-    no se entera y el formulario viaja sin la casilla.
+    se marca por JS disparando el `change` a mano — sin él, el JS de la página no
+    se entera y el formulario viaja sin la casilla.
+
+    Se **relee** el estado en vez de dar por hecho que el clic funcionó: si no
+    quedó marcada, quien mira el log necesita saber que el token no llegó por
+    esto y no porque Prisa no lo emita. Son dos problemas distintos y solo uno se
+    arregla desde aquí.
     """
     try:
         casilla = pagina.locator(_CASILLA_RECORDARME).first
         if await casilla.count() == 0:
-            return
+            log.warning("no existe la casilla «no cerrar sesión» en el formulario")
+            return False
         try:
             await casilla.check(timeout=3_000, force=True)
         except Exception:  # noqa: BLE001 - se reintenta por JS
@@ -520,8 +535,12 @@ async def _marcar_recordarme(pagina: Any) -> None:
                 "el => { el.checked = true;"
                 " el.dispatchEvent(new Event('change', {bubbles: true})); }",
             )
+        marcada = bool(await casilla.is_checked())
+        log.info("casilla «no cerrar sesión» marcada: %s", marcada)
+        return marcada
     except Exception as exc:  # noqa: BLE001 - no vale la pena abortar el login
         log.debug("no se pudo marcar «recordarme»: %s", exc)
+        return False
 
 
 async def _esta_autenticado(pagina: Any) -> bool:
@@ -558,6 +577,20 @@ async def _mensaje_del_sitio(pagina: Any) -> str:
     # algo, que es el que lleva el texto y no el envoltorio.
     utiles = [str(t) for t in textos if t and 8 < len(str(t)) < 300]
     return min(utiles, key=len) if utiles else ""
+
+
+# Symfony llama `REMEMBERME` al suyo, pero Oro y sus plantillas lo renombran, así
+# que se busca por parecido en vez de por un nombre exacto. Un nombre fijo aquí
+# haría que un token que sí llegó se reporte como ausente.
+_PISTAS_TOKEN = ("remember", "rememberme", "_security", "persist")
+
+
+def _token_persistente(cookies: dict[str, str]) -> str | None:
+    """Nombre de la cookie que permite refrescar sin navegador, si vino."""
+    for nombre in cookies:
+        if any(pista in nombre.lower() for pista in _PISTAS_TOKEN):
+            return nombre
+    return None
 
 
 def _enmascarar(usuario: str) -> str:

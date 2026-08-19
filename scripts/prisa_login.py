@@ -135,6 +135,9 @@ async def entrar(args: argparse.Namespace) -> int:
 
     sesion.guardar(ruta)
     print(f"dentro. {len(sesion.cookies)} cookies guardadas en {ruta} (0600)")
+    # Los NOMBRES, nunca los valores: con los nombres se ve si vino el token
+    # persistente, y esta salida se acaba pegando en un chat.
+    print(f"  cookies: {', '.join(sorted(sesion.cookies))}")
 
     cliente = ClientePrisa(sesion, base_url=cfg.prisa_base_url)
     try:

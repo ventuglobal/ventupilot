@@ -254,12 +254,21 @@ Dos cosas hacen que esto aguante desatendido:
   entre corridas. Es lo que hace que el reCAPTCHA deje de tratar cada login como
   un visitante recién llegado, y por lo que en ventu 1.0 el headless funciona
   *después* de que un login con ventana haya sembrado el perfil.
-- **«Recordarme»** se marca siempre. Es lo que hace que Symfony emita su token
-  persistente, y ese token es la diferencia entre refrescar la sesión sin
-  navegador y llamar a una persona cada ocho horas. La casilla está oculta tras
-  un `<label>` estilizado, así que se fuerza y, si no toma, se marca por JS con
-  su evento `change`. Si no llega el token, se avisa en el log en vez de fallar:
-  la sesión sirve igual, solo dura menos.
+- **«Recordarme»** —en el sitio, «No cerrar sesión»— se marca siempre. Es lo que
+  hace que Symfony emita su token persistente, y ese token permite refrescar la
+  sesión sin abrir un navegador. La casilla está oculta tras un `<label>`
+  estilizado, así que se fuerza y, si no toma, se marca por JS con su evento
+  `change`. Después se **relee** el estado: si no quedó marcada, quien lea el
+  log tiene que poder distinguir eso de que Prisa no emita el token, porque solo
+  el primer caso se arregla desde aquí.
+
+  Comprobado contra el formulario real: la casilla existe, queda marcada y
+  `_remember_me=on` viaja en el POST. Aun así **prisa.cl no devuelve token
+  persistente**. Es decisión suya, no un fallo de este lado.
+
+  No es grave: sin token, cuando la sesión caduque hay que volver a entrar con
+  navegador — pero eso ya es automático gracias a Xvfb, así que sigue sin hacer
+  falta una persona. El token solo lo abarataría.
 
 ## Los listados no están en el HTML
 
