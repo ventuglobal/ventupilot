@@ -116,3 +116,42 @@ async def test_esta_viva_no_lanza_si_la_red_falla() -> None:
         raise httpx.ConnectError("sin red")
 
     assert not await _cliente(manejador).esta_viva()
+
+
+async def test_ajax_manda_la_cabecera_que_el_datagrid_exige() -> None:
+    """Sin ella Oro devuelve la página entera en vez del JSON.
+
+    El síntoma es un HTML de 2 MB donde se esperaban filas, que se lee como
+    "este endpoint no sirve" cuando lo único que falta es una cabecera.
+    """
+    vistas: list[str | None] = []
+
+    def manejador(peticion: httpx.Request) -> httpx.Response:
+        vistas.append(peticion.headers.get("x-requested-with"))
+        return httpx.Response(200, text='{"data": []}')
+
+    cliente = _cliente(manejador)
+    await cliente.obtener("/datagrid/frontend-product-search-grid", ajax=True)
+    await cliente.obtener("/customer/order/")
+
+    assert vistas == ["XMLHttpRequest", None]
+
+
+async def test_la_cabecera_ajax_sobrevive_al_desafio_del_waf() -> None:
+    """El reintento tras el desafío es la petición que de verdad trae los datos.
+
+    Si la cabecera se quedara en el primer intento, el datagrid contestaría con
+    HTML justo cuando por fin se le puede preguntar.
+    """
+    vistas: list[str | None] = []
+
+    def manejador(peticion: httpx.Request) -> httpx.Response:
+        vistas.append(peticion.headers.get("x-requested-with"))
+        if len(vistas) == 1:
+            return httpx.Response(200, text=HTML_DESAFIO)
+        return httpx.Response(200, text='{"data": []}')
+
+    cliente = _cliente(manejador)
+    await cliente.obtener("/datagrid/frontend-product-search-grid", ajax=True)
+
+    assert vistas == ["XMLHttpRequest", "XMLHttpRequest"]

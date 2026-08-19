@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import html as entidades
+import json
 import re
 import sys
 from pathlib import Path
@@ -65,11 +66,14 @@ async def ver(args: argparse.Namespace) -> int:
 
     cliente = ClientePrisa(sesion, base_url=cfg.prisa_base_url)
     try:
-        respuesta = await cliente.obtener(args.ruta)
+        respuesta = await cliente.obtener(args.ruta, ajax=args.ajax)
     finally:
         await cliente.cerrar()
 
     html = respuesta.text
+
+    if args.ajax:
+        return _informar_json(args, respuesta, html)
     titulo = _RE_TITULO.search(html)
     # El enlace de salir es la única señal fiable: la cookie de sesión existe
     # también para un visitante anónimo.
@@ -105,6 +109,57 @@ async def ver(args: argparse.Namespace) -> int:
         print(_texto_visible(html)[: args.texto])
 
     return 0 if autenticado else 1
+
+
+def _informar_json(
+    args: argparse.Namespace, respuesta: object, cuerpo: str
+) -> int:
+    """Describe la forma de una respuesta JSON, no su contenido.
+
+    Un datagrid devuelve las filas de la cuenta —precios negociados, pedidos—,
+    y esta salida está pensada para pegarse en un chat. Así que se cuenta y se
+    nombra: cuántas filas, qué columnas, de qué tipo el primer valor. Con eso
+    se decide si merece la pena escribir un parser, sin que viaje ni un dato.
+    """
+    print(f"tipo        {'JSON' if _es_json(cuerpo) else 'NO es JSON (llegó HTML)'}")
+
+    if not _es_json(cuerpo):
+        print(f"tamaño      {len(cuerpo):,} bytes".replace(",", "."))
+        print()
+        print(
+            "el endpoint devolvió una página, no datos. O la ruta no es la del"
+            " datagrid, o falta algún parámetro que Oro exige.",
+            file=sys.stderr,
+        )
+        return 1
+
+    datos = json.loads(cuerpo)
+    print(f"claves      {', '.join(sorted(datos)) if isinstance(datos, dict) else '(lista)'}")
+
+    filas = datos.get("data") if isinstance(datos, dict) else datos
+    if isinstance(filas, list):
+        print(f"filas       {len(filas)}")
+        if filas and isinstance(filas[0], dict):
+            print("columnas    " + ", ".join(sorted(filas[0])[:25]))
+    if isinstance(datos, dict) and isinstance(datos.get("options"), dict):
+        total = datos["options"].get("totalRecords")
+        if total is not None:
+            print(f"total       {total} registros según el servidor")
+
+    if args.guardar:
+        destino = Path(args.guardar)
+        destino.write_text(cuerpo, encoding="utf-8")
+        print(f"guardado    {destino}")
+
+    return 0
+
+
+def _es_json(cuerpo: str) -> bool:
+    try:
+        json.loads(cuerpo)
+    except ValueError:
+        return False
+    return True
 
 
 def _estructura(html: str) -> None:
@@ -167,6 +222,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Trae una página de prisa.cl")
     parser.add_argument("ruta", nargs="?", default="/customer/order/")
     parser.add_argument("--guardar", help="vuelca el HTML a un fichero")
+    parser.add_argument(
+        "--ajax",
+        action="store_true",
+        help="pide como XMLHttpRequest y describe el JSON (para los datagrids)",
+    )
     parser.add_argument(
         "--estructura",
         action="store_true",

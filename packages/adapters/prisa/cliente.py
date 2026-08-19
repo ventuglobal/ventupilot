@@ -84,11 +84,16 @@ class ClientePrisa:
             await self._cliente.aclose()
             self._cliente = None
 
-    async def obtener(self, ruta: str) -> httpx.Response:
+    async def obtener(self, ruta: str, *, ajax: bool = False) -> httpx.Response:
         """GET de una ruta del sitio, resolviendo el desafío del WAF si aparece.
 
         Args:
             ruta: ruta absoluta del sitio (`/customer/order/`) o URL completa.
+            ajax: manda `X-Requested-With: XMLHttpRequest`. Los datagrids de
+                OroCommerce —que son de donde salen los listados, porque en el
+                HTML no están— devuelven la página entera sin esa cabecera y el
+                JSON con ella. Sin esto se recibe un HTML de 2 MB y se concluye
+                que el endpoint no sirve.
 
         Returns:
             La respuesta con el contenido real. Nunca la página del desafío.
@@ -100,9 +105,10 @@ class ClientePrisa:
         """
         cliente = await self._http()
         url = ruta if ruta.startswith("http") else f"{self._base_url}{ruta}"
+        cabeceras = {"X-Requested-With": "XMLHttpRequest"} if ajax else None
 
         for intento in range(_MAX_DESAFIOS + 1):
-            respuesta = await cliente.get(url)
+            respuesta = await cliente.get(url, headers=cabeceras)
             if not es_desafio(respuesta.text):
                 return respuesta
 
