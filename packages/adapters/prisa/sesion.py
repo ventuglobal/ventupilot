@@ -337,8 +337,19 @@ async def _esta_autenticado(pagina: Any) -> bool:
 
     Se busca el enlace de salir en vez de mirar cookies: `OROSFID` existe
     también para un visitante anónimo, así que su presencia no dice nada.
+
+    Si la página está navegando en ese preciso instante, Playwright lanza
+    "Execution context was destroyed". Eso no es un fallo: es que todavía no se
+    puede mirar, y la respuesta honesta es "no consta", no una excepción. Es
+    exactamente lo que pasa al sondear durante el login manual —la navegación
+    que se intenta detectar es la que rompe la consulta—, y dejarlo escapar
+    tumbaba el comando justo en el momento de acertar.
     """
-    return bool(await pagina.query_selector(f'a[href*="{RUTA_LOGOUT}"]'))
+    try:
+        return bool(await pagina.query_selector(f'a[href*="{RUTA_LOGOUT}"]'))
+    except Exception as exc:  # noqa: BLE001 - Playwright no tipa este error
+        log.debug("la sesión no se pudo comprobar ahora: %s", exc)
+        return False
 
 
 async def _mensaje_del_sitio(pagina: Any) -> str:
