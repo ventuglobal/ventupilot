@@ -67,9 +67,13 @@ Un Chromium **con ventana** pasa las tres barreras sin ayuda. No hace falta
 ningún servicio de resolución de captchas: el reCAPTCHA invisible no levanta
 reto y el POST llega al nivel de aplicación con su token de ~2.400 caracteres.
 
-En **headless** el POST también llega, pero el sitio lo rechaza. Por eso el
-valor por defecto es con ventana, sobre Xvfb cuando no hay pantalla — ver más
-abajo.
+Tras enviar el formulario **se sondea** hasta que aparezca la sesión, no se
+espera un rato fijo. Oro envía el login por AJAX y redirige después con
+JavaScript, y las páginas de Prisa pasan de 2 MB: mirar una sola vez a los seis
+segundos acierta o falla según lo cargada que esté la red. Cuando falla, el
+síntoma es el peor posible —el login entra, el navegador se cierra solo y el
+comando informa de un rechazo que nunca ocurrió—, y todo apunta a las
+credenciales, que es justo donde no está el problema.
 
 El navegador es para **entrar**, no para quedarse: mantener un Chromium vivo por
 petición no se sostiene en un worker. Una vez dentro, prisa.cl es un sitio
@@ -197,7 +201,7 @@ llamada.
 |---|---|
 | `RuntimeError: siguió desafiando` | el WAF cambió el script; resuélvelo con navegador y revisa `desafio.py` |
 | `no supe resolver` | mismo caso, pero la forma del script ya no encaja con los regex |
-| «no autenticó» sin mensaje del sitio | mira `prisa-fallo.png`, que el propio comando deja |
+| «no autenticó» sin mensaje del sitio | mira `prisa-fallo.png`, que el propio comando deja. Si en la foto se ve la sesión iniciada, el sitio tardó más que `espera_login_s` |
 | «tu cuenta ha sido deshabilitada» | es del lado de Prisa, no del código |
 | «los datos ingresados son incorrectos» | credencial, no código. Mira el recuento de caracteres que imprime el propio comando: si no cuadra, el shell mordió la clave — pásala por `.env` |
 | aparece un reto visual de reCAPTCHA | reputación de la IP — ver abajo |

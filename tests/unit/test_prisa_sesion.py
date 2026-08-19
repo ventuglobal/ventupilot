@@ -13,7 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from packages.adapters.prisa.sesion import Credenciales, Sesion, _esta_autenticado
+from packages.adapters.prisa.sesion import (
+    Credenciales,
+    ErrorLoginPrisa,
+    Sesion,
+    _esperar_autenticado,
+    _esta_autenticado,
+)
 
 
 class PaginaFalsa:
@@ -107,3 +113,52 @@ def test_el_repr_no_filtra_la_contrasena() -> None:
 
     assert "secreta-de-verdad" not in texto
     assert "alguien@ejemplo.cl" in texto
+
+
+class PaginaConRetraso:
+    """Se autentica recién a la enésima consulta, como un sitio que redirige tarde."""
+
+    def __init__(self, autentica_en: int) -> None:
+        self._autentica_en = autentica_en
+        self.consultas = 0
+        self.esperas = 0
+        self.cerrada = False
+
+    async def query_selector(self, selector: str) -> object:
+        self.consultas += 1
+        return object() if self.consultas >= self._autentica_en else None
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        self.esperas += 1
+
+    def is_closed(self) -> bool:
+        return self.cerrada
+
+
+async def test_espera_a_que_el_sitio_termine_de_redirigir() -> None:
+    """El fallo real: el login entraba y el comando informaba de un rechazo.
+
+    Comprobar una sola vez tras una espera fija acierta o falla según lo cargada
+    que esté la red, y con páginas de 2 MB falla a menudo. El síntoma era el peor
+    posible —el navegador se cerraba solo y se culpaba a las credenciales—, así
+    que este test fija que se sondea.
+    """
+    pagina = PaginaConRetraso(autentica_en=8)
+
+    assert await _esperar_autenticado(pagina, segundos=40)
+    assert pagina.consultas == 8
+
+
+async def test_se_rinde_cuando_de_verdad_no_entra() -> None:
+    pagina = PaginaConRetraso(autentica_en=10_000)
+
+    assert not await _esperar_autenticado(pagina, segundos=6, cada_ms=1_500)
+    assert pagina.consultas == 4
+
+
+async def test_cerrar_la_ventana_es_cancelar_y_no_averiarse() -> None:
+    pagina = PaginaConRetraso(autentica_en=10_000)
+    pagina.cerrada = True
+
+    with pytest.raises(ErrorLoginPrisa, match="se cerró la ventana"):
+        await _esperar_autenticado(pagina, segundos=40)

@@ -302,6 +302,7 @@ async def iniciar_sesion(
     ejecutable: str = "",
     perfil: Path | None = None,
     captura_fallo: Path | None = None,
+    espera_login_s: int = 40,
     timeout_ms: int = 45_000,
 ) -> Sesion:
     """Entra en prisa.cl con un navegador y devuelve las cookies resultantes.
@@ -316,6 +317,8 @@ async def iniciar_sesion(
             monitor, sobre una Xvfb que se levanta sola. Ponerlo en True solo
             tiene sentido con un `perfil` que ya traiga sesión.
         captura_fallo: dónde dejar una foto de la pantalla si el login no pasa.
+        espera_login_s: cuánto se sondea tras enviar el formulario antes de dar
+            el login por rechazado.
         perfil: directorio de perfil persistente de Chromium. Guarda cookies e
             historial entre corridas, que es lo que hace que el reCAPTCHA deje
             de tratar cada login como un visitante recién llegado.
@@ -367,14 +370,14 @@ async def iniciar_sesion(
         await _marcar_recordarme(pagina)
         await pagina.click(_BOTON_ENTRAR)
 
-        # Oro envía el login por AJAX y redirige después con JavaScript, así que
-        # no hay una navegación única a la que engancharse. Se espera a que el
-        # sitio se estabilice y se pregunta por el estado real.
-        await pagina.wait_for_timeout(6_000)
+        entro = await _esperar_autenticado(pagina, segundos=espera_login_s)
 
+        # Las cookies se leen DESPUÉS de confirmar la sesión, no antes: el token
+        # persistente de «Recordarme» llega con la navegación posterior al login,
+        # y capturarlas demasiado pronto lo deja fuera.
         cookies = {c["name"]: c["value"] for c in await contexto.cookies()}
 
-        if not await _esta_autenticado(pagina):
+        if not entro:
             aviso = await _mensaje_del_sitio(pagina)
             foto = await _fotografiar(pagina, captura_fallo)
             log.warning(
@@ -445,21 +448,39 @@ async def iniciar_sesion_manual(
         # Se sondea en vez de esperar un selector: el login puede acabar en
         # cualquier página —Oro respeta el `_target_path`— y encadenar esperas
         # a una URL concreta se rompe en cuanto Prisa cambie el destino.
-        for _ in range(max(1, espera_max_s // 2)):
-            # Cerrar la ventana es una forma legítima de decir "déjalo". Sin
-            # esto sale un TargetClosedError de Playwright, que parece una
-            # avería y no una cancelación.
-            if pagina.is_closed():
-                raise ErrorLoginPrisa("se cerró la ventana antes de completar el login")
-            if await _esta_autenticado(pagina):
-                cookies = {c["name"]: c["value"] for c in await contexto.cookies()}
-                log.info("sesión de prisa.cl iniciada a mano")
-                return Sesion(cookies=cookies)
-            await pagina.wait_for_timeout(2_000)
+        if await _esperar_autenticado(pagina, segundos=espera_max_s, cada_ms=2_000):
+            cookies = {c["name"]: c["value"] for c in await contexto.cookies()}
+            log.info("sesión de prisa.cl iniciada a mano")
+            return Sesion(cookies=cookies)
 
         raise ErrorLoginPrisa(
             f"pasaron {espera_max_s}s sin que se completara el login en el navegador"
         )
+
+
+async def _esperar_autenticado(pagina: Any, *, segundos: int, cada_ms: int = 1_500) -> bool:
+    """Sondea hasta que haya sesión, o hasta agotar `segundos`.
+
+    Sondear y no esperar un rato fijo es la diferencia entre detectar el login y
+    no detectarlo. Oro envía el formulario por AJAX y redirige después con
+    JavaScript, y las páginas de Prisa pesan más de 2 MB: comprobar una sola vez
+    tras una espera fija acierta o falla según lo cargada que esté la red. Ese
+    fue un fallo real —el login entraba, el navegador se cerraba solo y el
+    comando informaba de un rechazo que no había ocurrido—, y el rato fijo hacía
+    que pareciera un problema de credenciales.
+
+    Raises:
+        ErrorLoginPrisa: si alguien cierra la ventana. Es una cancelación
+            legítima, no una avería, y sin esto sale un TargetClosedError de
+            Playwright que parece lo segundo.
+    """
+    for _ in range(max(1, int(segundos * 1_000 / cada_ms))):
+        if pagina.is_closed():
+            raise ErrorLoginPrisa("se cerró la ventana antes de completar el login")
+        if await _esta_autenticado(pagina):
+            return True
+        await pagina.wait_for_timeout(cada_ms)
+    return False
 
 
 async def _fotografiar(pagina: Any, destino: Path | None) -> Path | None:
