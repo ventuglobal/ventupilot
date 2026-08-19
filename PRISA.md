@@ -45,10 +45,21 @@ Campos: `_username` (RUT con guion y dígito verificador, o correo),
 
 ### 3. reCAPTCHA v2 invisible
 
-El formulario incluye un campo `g-recaptcha-response`. Ese token solo lo genera
-JavaScript ejecutándose en un navegador real. **Esta es la barrera que hace
-imposible el login con un cliente HTTP puro**, por muy bien que resuelvas las
-otras dos.
+El formulario carga reCAPTCHA (sitekey `6Lf1MuMrAAAAAM5zsVPQxxIND_ZPpfmtkmHJ9by9`)
+y ese token solo lo genera JavaScript ejecutándose en un navegador real. **Esta
+es la barrera que hace imposible el login con un cliente HTTP puro**, por muy
+bien que resuelvas las otras dos.
+
+Ojo al nombre del campo si alguna vez inspeccionas el POST: Google deja su token
+en el `g-recaptcha-response` del widget, pero **Prisa lo copia a un campo propio
+llamado `google_rechaptcha`** —con la `h` traspuesta— y es ese el que viaja. Un
+POST real lleva ahí unos 2.400 caracteres; buscar el nombre estándar da cero y
+hace pensar que el captcha no se está resolviendo cuando sí.
+
+Otra cosa que hace el JS del sitio: `rut-view` **reformatea el RUT mientras se
+escribe**. Escribir `11111111-1` envía `11.111.111-1`. No hay que normalizarlo a
+mano —el navegador hace lo mismo con una persona delante—, pero explica por qué
+lo que se envía no es literalmente lo que se escribió. Un correo viaja tal cual.
 
 ## Cómo se resuelve aquí
 
@@ -145,6 +156,7 @@ llamada.
 | `no supe resolver` | mismo caso, pero la forma del script ya no encaja con los regex |
 | «no autenticó» sin mensaje del sitio | el formulario cambió: corre con `--ver` y mira |
 | «tu cuenta ha sido deshabilitada» | es del lado de Prisa, no del código |
+| «los datos ingresados son incorrectos» | credencial, no código. Verifica `echo "${#PRISA_PASSWORD} caracteres"`: el shell se come `$` y `!` dentro de comillas dobles |
 | aparece un reto visual de reCAPTCHA | reputación de la IP — ver abajo |
 | `ERR_CONNECTION_RESET` en Chromium | un proxy que retermina TLS no traga el ClientHello post-cuántico. `--arg=--ssl-version-max=tls1.2` |
 
