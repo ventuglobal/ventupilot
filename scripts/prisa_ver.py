@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html as entidades
 import re
 import sys
 from pathlib import Path
@@ -42,6 +43,7 @@ _RE_TITULO = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
 _RE_GRID_NOMBRE = re.compile(r'["\']gridName["\']\s*:\s*["\']([\w-]+)["\']')
 _RE_GRID_URL = re.compile(r'(/datagrid/[\w/-]+|/api/rest/[\w/-]+|/ajax/[\w/-]+)')
 _RE_COMPONENTE = re.compile(r'data-page-component-module=["\']([^"\']+)["\']')
+_RE_RUTA_DATOS = re.compile(r'"(/(?:product|customer|catalog|pricing)[\w/-]*)"')
 _RE_TABLA = re.compile(r"<table", re.I)
 _RE_ETIQUETAS = re.compile(r"<[^>]+>")
 # Se quitan enteros, contenido incluido. En una página de Oro el JavaScript es
@@ -78,7 +80,10 @@ async def ver(args: argparse.Namespace) -> int:
     print(f"llegó a     {respuesta.url}")
     print(f"estado      {respuesta.status_code}")
     print(f"tamaño      {len(html):,} bytes".replace(",", "."))
-    print(f"título      {_limpiar(titulo.group(1)) if titulo else '(sin título)'}")
+    print(
+        "título      "
+        + (entidades.unescape(_limpiar(titulo.group(1))) if titulo else "(sin título)")
+    )
     print(f"con sesión  {'sí' if autenticado else 'NO — te devolvió contenido anónimo'}")
     print(f"tablas      {len(_RE_TABLA.findall(html))}")
 
@@ -118,27 +123,40 @@ def _estructura(html: str) -> None:
     """
     print("\n--- de dónde saldrían los datos ---")
 
-    rejillas = sorted(set(_RE_GRID_NOMBRE.findall(html)))
+    # Oro mete la configuración del datagrid en un atributo HTML, así que su
+    # JSON llega con las comillas escapadas: `&quot;gridName&quot;`. Buscar
+    # sobre el crudo no encuentra ninguna rejilla y hace concluir que la página
+    # no tiene, cuando lo que pasa es que no se está mirando bien.
+    plano = entidades.unescape(html)
+
+    rejillas = sorted(set(_RE_GRID_NOMBRE.findall(plano)))
     print(f"rejillas    {', '.join(rejillas) if rejillas else '(ninguna)'}")
 
-    urls = sorted({u for u in _RE_GRID_URL.findall(html) if len(u) < 120})
+    urls = sorted({u for u in _RE_GRID_URL.findall(plano) if len(u) < 120})
     print(f"endpoints   {len(urls)}")
     for url in urls[:12]:
         print(f"            {url}")
     if len(urls) > 12:
         print(f"            … y {len(urls) - 12} más")
 
-    componentes = sorted(set(_RE_COMPONENTE.findall(html)))
+    componentes = sorted(set(_RE_COMPONENTE.findall(plano)))
     print(f"componentes {len(componentes)}")
     for comp in componentes[:8]:
         print(f"            {comp}")
 
     print(f"filas <tr>  {len(re.findall(r'<tr', html, re.I))}")
 
+    # Los nombres de ruta de Oro dicen qué hay debajo sin tener que abrirlo.
+    rutas = sorted({r for r in _RE_RUTA_DATOS.findall(plano) if len(r) < 90})
+    if rutas:
+        print(f"rutas útiles {len(rutas)}")
+        for r in rutas[:10]:
+            print(f"            {r}")
+
 
 def _texto_visible(html: str) -> str:
     """El texto que leería una persona, sin el JavaScript de por medio."""
-    return _limpiar(_RE_ETIQUETAS.sub(" ", _RE_NO_TEXTO.sub(" ", html)))
+    return _limpiar(entidades.unescape(_RE_ETIQUETAS.sub(" ", _RE_NO_TEXTO.sub(" ", html))))
 
 
 def _limpiar(texto: str) -> str:
