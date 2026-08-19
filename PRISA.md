@@ -324,11 +324,17 @@ esa salida se acaba pegando en un chat o en un issue.
 
 ## Apify
 
-La idea original era usar el [MCP de Apify] para este login. Conviene tener
-claro qué hace y qué no: el MCP expone **buscar y ejecutar Actors** de Apify,
-consultar su documentación y leer datasets. No hay ningún Actor que sepa entrar
-en prisa.cl, y el MCP no aporta nada a las tres barreras de arriba — las pasa un
-Chromium normal, gratis.
+La idea original era usar el [MCP de Apify] para este login. **No hace falta**,
+y conviene dejar escrito por qué para que nadie lo reintente.
+
+El MCP expone buscar y ejecutar Actors de Apify, leer su documentación y sus
+datasets. No hay ningún Actor que sepa entrar en prisa.cl, y ninguna de las tres
+barreras de arriba se resuelve con él: el desafío del WAF lo descifra
+`cryptography`, el CSRF es leer un campo, y el token del reCAPTCHA lo genera un
+Chromium normal. Se configuró y no se llegó a usar, así que se quitó: sin
+`APIFY_TOKEN` el servidor MCP no arranca y queda marcado como fallido en cada
+sesión, que es ruido a cambio de nada. Restaurarlo es un `.mcp.json` de seis
+líneas apuntando a `https://mcp.apify.com`.
 
 Donde Apify **sí** ayuda es en la única barrera que puede volverse dura: el
 reCAPTCHA puntúa según la reputación de la IP, y desde un datacenter puede
@@ -340,19 +346,14 @@ PRISA_PROXY="http://groups-RESIDENTIAL,country-CL:<APIFY_PROXY_PASSWORD>@proxy.a
   uv run python -m scripts.prisa_login
 ```
 
-Eso es el proxy residencial de Apify, que se factura por GB y no necesita el
-MCP para nada. La otra cosa que Apify aporta —alojar el navegador— solo hace
-falta si no quieres un Chromium en Railway.
+Eso es el **proxy residencial**, que es otro producto y no necesita el MCP para
+nada: se factura por GB y entra por `PRISA_PROXY`. La otra cosa que Apify
+aportaría —alojar el navegador— solo hace falta si no quieres un Chromium en
+Railway.
 
-El MCP queda configurado en `.mcp.json` por si se quiere explorar el Store
-desde Claude Code. Necesita un token en el entorno:
-
-```bash
-export APIFY_TOKEN="apify_api_..."
-```
-
-Sin `APIFY_TOKEN` el servidor no arranca y Claude Code lo marca como fallido;
-no afecta a nada más.
+Hoy no hace falta ninguna de las dos. El login pasa desde una IP chilena
+doméstica sin que el reCAPTCHA levante un solo reto. Desde una IP de datacenter
+puede cambiar, y ese es el momento de acordarse de esto.
 
 ## Nota
 
