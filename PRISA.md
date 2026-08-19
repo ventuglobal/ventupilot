@@ -84,6 +84,32 @@ y comprueba que la sesión se puede reutilizar desde `httpx`. Si ya hay una
 sesión viva no vuelve a entrar: cada login gasta reputación de IP frente al
 reCAPTCHA.
 
+### Sin uv
+
+El resto del proyecto usa uv, pero esto no lo necesita. Con `venv` y `pip`,
+desde la raíz del repo:
+
+```bash
+python3.12 -m venv .venv            # el proyecto pide Python >= 3.12
+. .venv/bin/activate
+
+pip install -e ".[prisa]"
+playwright install chromium
+
+export PRISA_USUARIO="12345678-9"
+export PRISA_PASSWORD="..."
+
+python -m scripts.prisa_login
+```
+
+`python3.12` y no `python3`: si el `python3` del sistema es 3.11 o anterior,
+`pip install` falla por `requires-python` con un mensaje que habla del paquete
+y no de tu intérprete, y se pierde un rato buscando en el sitio equivocado.
+
+Hay que lanzarlo **desde la raíz del repo**: `scripts/` no se instala como
+paquete —solo `packages/`—, así que `python -m scripts.prisa_login` depende de
+que el directorio actual esté en `sys.path`.
+
 Opciones útiles:
 
 | | |
