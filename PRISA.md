@@ -144,9 +144,32 @@ Opciones útiles:
 | `--ver` | abre el navegador con ventana, para ver qué pasa cuando el formulario cambia |
 | `--forzar` | entra aunque la sesión guardada siga siendo válida |
 | `--arg=...` | bandera extra para Chromium, repetible |
+| `--manual` | abre el navegador para que entres tú; ver abajo |
+| `--espera N` | segundos que aguanta `--manual` (300 por defecto) |
 
 La contraseña nunca se pasa por argumento: `ps` y el historial del shell son
 públicos dentro de la máquina.
+
+### Entrar a mano
+
+```bash
+uv run python -m scripts.prisa_login --manual
+```
+
+Abre una ventana en la página de login y espera. Entras tú, con el ratón, y en
+cuanto detecta la sesión se queda con las cookies y cierra. El resultado es
+**idéntico** al del login automático —las mismas cookies para `ClientePrisa`—,
+así que nada de aguas abajo cambia.
+
+Sirve cuando el login automático no pasa y no está claro por qué: una
+credencial que el proceso recibe mal, una verificación nueva, un cambio en el
+formulario. Y es la respuesta correcta si algún día Prisa añade segundo factor:
+automatizar un 2FA es pelearse con la medida de seguridad, teclearlo una vez
+cada varias horas no.
+
+Lo que no hace es sesión eterna. OroCommerce caduca por inactividad, así que un
+worker desatendido no puede depender de esto — para eso hace falta que el login
+automático funcione.
 
 En código:
 

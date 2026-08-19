@@ -15,6 +15,7 @@ from .sesion import (
     ErrorLoginPrisa,
     Sesion,
     iniciar_sesion,
+    iniciar_sesion_manual,
 )
 
 __all__ = [
@@ -27,5 +28,6 @@ __all__ = [
     "SesionCaducadaPrisa",
     "es_desafio",
     "iniciar_sesion",
+    "iniciar_sesion_manual",
     "resolver",
 ]

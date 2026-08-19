@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -149,6 +151,50 @@ def _solo_dueno(ruta: str, flags: int) -> int:
     return os.open(ruta, flags, 0o600)
 
 
+@asynccontextmanager
+async def _navegador(
+    *,
+    headless: bool,
+    proxy: str,
+    args_chromium: tuple[str, ...],
+    ejecutable: str,
+) -> AsyncIterator[Any]:
+    """Abre Chromium y cede un contexto ya configurado para prisa.cl.
+
+    Compartido por el login automático y el manual para que no se separen: el
+    `locale` y la zona horaria chilenos no son cosmética —forman parte de la
+    señal que mira el reCAPTCHA, y un navegador que dice estar en UTC pidiendo
+    un sitio chileno puntúa peor—, y tenerlos duplicados es tenerlos distintos
+    dentro de tres meses.
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ModuleNotFoundError as exc:  # pragma: no cover - depende del entorno
+        raise RuntimeError(
+            "Falta Playwright. Instálalo con:\n"
+            "  uv sync --extra prisa && uv run playwright install chromium"
+        ) from exc
+
+    lanzamiento: dict[str, Any] = {
+        "headless": headless,
+        "args": ["--disable-dev-shm-usage", *args_chromium],
+    }
+    if proxy:
+        lanzamiento["proxy"] = {"server": proxy}
+    if ejecutable:
+        lanzamiento["executable_path"] = ejecutable
+
+    async with async_playwright() as pw:
+        navegador = await pw.chromium.launch(**lanzamiento)
+        try:
+            yield await navegador.new_context(
+                locale="es-CL",
+                timezone_id="America/Santiago",
+            )
+        finally:
+            await navegador.close()
+
+
 async def iniciar_sesion(
     credenciales: Credenciales,
     *,
@@ -181,73 +227,109 @@ async def iniciar_sesion(
             error, o si tras enviar el formulario seguimos sin sesión.
         RuntimeError: si Playwright no está instalado.
     """
-    try:
-        from playwright.async_api import async_playwright
-    except ModuleNotFoundError as exc:  # pragma: no cover - depende del entorno
-        raise RuntimeError(
-            "Falta Playwright. Instálalo con:\n"
-            "  uv sync --extra prisa && uv run playwright install chromium"
-        ) from exc
+    async with _navegador(
+        headless=headless, proxy=proxy, args_chromium=args_chromium, ejecutable=ejecutable
+    ) as contexto:
+        pagina = await contexto.new_page()
+        pagina.set_default_timeout(timeout_ms)
 
-    lanzamiento: dict[str, Any] = {
-        "headless": headless,
-        "args": ["--disable-dev-shm-usage", *args_chromium],
-    }
-    if proxy:
-        lanzamiento["proxy"] = {"server": proxy}
-    if ejecutable:
-        lanzamiento["executable_path"] = ejecutable
+        # `domcontentloaded` y no `networkidle`: la home carga analítica y
+        # widgets que no callan nunca, y esperar a que lo hagan es esperar
+        # al timeout.
+        await pagina.goto(f"{base_url}{RUTA_LOGIN}", wait_until="domcontentloaded")
 
-    async with async_playwright() as pw:
-        navegador = await pw.chromium.launch(**lanzamiento)
-        try:
-            # `locale` y `timezone_id` chilenos no son cosmética: forman parte
-            # de la señal que mira el reCAPTCHA, y un navegador que dice estar
-            # en UTC pidiendo un sitio chileno puntúa peor.
-            contexto = await navegador.new_context(
-                locale="es-CL",
-                timezone_id="America/Santiago",
+        # El reCAPTCHA invisible necesita haberse inicializado antes del envío.
+        # Sin esta espera el POST sale sin el token —que Prisa manda en un campo
+        # propio, `google_rechaptcha`, no en el `g-recaptcha-response` estándar.
+        await pagina.wait_for_selector(_CAMPO_PASSWORD)
+        await pagina.wait_for_timeout(3_000)
+
+        await pagina.fill(_CAMPO_USUARIO, credenciales.usuario)
+        await pagina.fill(_CAMPO_PASSWORD, credenciales.password)
+        await pagina.click(_BOTON_ENTRAR)
+
+        # Oro envía el login por AJAX y redirige después con JavaScript, así que
+        # no hay una navegación única a la que engancharse. Se espera a que el
+        # sitio se estabilice y se pregunta por el estado real.
+        await pagina.wait_for_timeout(6_000)
+
+        cookies = {c["name"]: c["value"] for c in await contexto.cookies()}
+
+        if not await _esta_autenticado(pagina):
+            aviso = await _mensaje_del_sitio(pagina)
+            log.warning(
+                "login rechazado en prisa.cl para %s", _enmascarar(credenciales.usuario)
             )
-            pagina = await contexto.new_page()
-            pagina.set_default_timeout(timeout_ms)
+            raise ErrorLoginPrisa(
+                f"prisa.cl no autenticó a {_enmascarar(credenciales.usuario)}"
+                + (f": {aviso}" if aviso else ""),
+                mensaje_sitio=aviso,
+            )
 
-            # `domcontentloaded` y no `networkidle`: la home carga analítica y
-            # widgets que no callan nunca, y esperar a que lo hagan es esperar
-            # al timeout.
-            await pagina.goto(f"{base_url}{RUTA_LOGIN}", wait_until="domcontentloaded")
+        log.info("sesión de prisa.cl iniciada para %s", _enmascarar(credenciales.usuario))
+        return Sesion(cookies=cookies)
 
-            # El reCAPTCHA invisible necesita haberse inicializado antes del
-            # envío. Sin esta espera el POST sale sin `g-recaptcha-response`.
-            await pagina.wait_for_selector(_CAMPO_PASSWORD)
-            await pagina.wait_for_timeout(3_000)
 
-            await pagina.fill(_CAMPO_USUARIO, credenciales.usuario)
-            await pagina.fill(_CAMPO_PASSWORD, credenciales.password)
-            await pagina.click(_BOTON_ENTRAR)
+async def iniciar_sesion_manual(
+    *,
+    base_url: str = BASE_URL,
+    espera_max_s: int = 300,
+    proxy: str = "",
+    args_chromium: tuple[str, ...] = (),
+    ejecutable: str = "",
+    headless: bool = False,
+    al_abrir: Callable[[], None] | None = None,
+) -> Sesion:
+    """Abre el navegador, espera a que entres tú, y se queda con las cookies.
 
-            # Oro envía el login por AJAX y redirige después con JavaScript, así
-            # que no hay una navegación única a la que engancharse. Se espera a
-            # que el sitio se estabilice y se pregunta por el estado real.
-            await pagina.wait_for_timeout(6_000)
+    Es la salida cuando el login automático no pasa y no está claro por qué:
+    credencial que el proceso recibe mal, una verificación nueva, un cambio en
+    el formulario. Lo que produce es exactamente lo mismo —cookies para
+    `ClientePrisa`—, así que todo lo de aguas abajo sigue igual.
 
-            cookies = {c["name"]: c["value"] for c in await contexto.cookies()}
-            autenticado = await _esta_autenticado(pagina)
+    También es la respuesta correcta si algún día Prisa añade segundo factor.
+    Automatizar un 2FA es pelearse con la medida de seguridad; teclearlo una vez
+    cada varias horas, no.
 
-            if not autenticado:
-                aviso = await _mensaje_del_sitio(pagina)
-                log.warning(
-                    "login rechazado en prisa.cl para %s", _enmascarar(credenciales.usuario)
-                )
-                raise ErrorLoginPrisa(
-                    f"prisa.cl no autenticó a {_enmascarar(credenciales.usuario)}"
-                    + (f": {aviso}" if aviso else ""),
-                    mensaje_sitio=aviso,
-                )
+    Args:
+        espera_max_s: cuánto se espera a que completes el login antes de
+            rendirse. Por defecto cinco minutos.
+        headless: solo para tests. Sin ventana no hay nadie que pueda entrar.
+        al_abrir: se llama cuando la página ya está lista, para avisar por
+            consola. Aquí en vez de un `print` porque este módulo no decide
+            cómo se le habla al usuario.
 
-            log.info("sesión de prisa.cl iniciada para %s", _enmascarar(credenciales.usuario))
-            return Sesion(cookies=cookies)
-        finally:
-            await navegador.close()
+    Raises:
+        ErrorLoginPrisa: si se agota la espera sin sesión.
+        RuntimeError: si Playwright no está instalado.
+    """
+    async with _navegador(
+        headless=headless, proxy=proxy, args_chromium=args_chromium, ejecutable=ejecutable
+    ) as contexto:
+        pagina = await contexto.new_page()
+        await pagina.goto(f"{base_url}{RUTA_LOGIN}", wait_until="domcontentloaded")
+
+        if al_abrir is not None:
+            al_abrir()
+
+        # Se sondea en vez de esperar un selector: el login puede acabar en
+        # cualquier página —Oro respeta el `_target_path`— y encadenar esperas
+        # a una URL concreta se rompe en cuanto Prisa cambie el destino.
+        for _ in range(max(1, espera_max_s // 2)):
+            # Cerrar la ventana es una forma legítima de decir "déjalo". Sin
+            # esto sale un TargetClosedError de Playwright, que parece una
+            # avería y no una cancelación.
+            if pagina.is_closed():
+                raise ErrorLoginPrisa("se cerró la ventana antes de completar el login")
+            if await _esta_autenticado(pagina):
+                cookies = {c["name"]: c["value"] for c in await contexto.cookies()}
+                log.info("sesión de prisa.cl iniciada a mano")
+                return Sesion(cookies=cookies)
+            await pagina.wait_for_timeout(2_000)
+
+        raise ErrorLoginPrisa(
+            f"pasaron {espera_max_s}s sin que se completara el login en el navegador"
+        )
 
 
 async def _esta_autenticado(pagina: Any) -> bool:

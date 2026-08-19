@@ -36,20 +36,24 @@ from packages.adapters.prisa import (
     ErrorLoginPrisa,
     Sesion,
     iniciar_sesion,
+    iniciar_sesion_manual,
 )
 
 
 async def entrar(args: argparse.Namespace) -> int:
     cfg = get_prisa_settings()
     try:
-        credenciales = Credenciales(
-            usuario=cfg.prisa_usuario, password=cfg.prisa_password
+        credenciales = (
+            None
+            if args.manual
+            else Credenciales(usuario=cfg.prisa_usuario, password=cfg.prisa_password)
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         print(
             "defínelos en .env (recomendado: el shell no expande nada ahí)"
-            " o expórtalos con comillas simples",
+            " o expórtalos con comillas simples."
+            "  Sin credenciales, --manual te deja entrar a mano.",
             file=sys.stderr,
         )
         return 2
@@ -77,14 +81,28 @@ async def entrar(args: argparse.Namespace) -> int:
 
     print("abriendo navegador…", flush=True)
     try:
-        sesion = await iniciar_sesion(
-            credenciales,
-            headless=not args.ver,
-            base_url=cfg.prisa_base_url,
-            proxy=cfg.prisa_proxy,
-            args_chromium=extra,
-            ejecutable=cfg.prisa_chromium_path,
-        )
+        if credenciales is None:
+            sesion = await iniciar_sesion_manual(
+                base_url=cfg.prisa_base_url,
+                espera_max_s=args.espera,
+                proxy=cfg.prisa_proxy,
+                args_chromium=extra,
+                ejecutable=cfg.prisa_chromium_path,
+                al_abrir=lambda: print(
+                    f"entra tú en la ventana que se abrió. Tienes {args.espera}s;"
+                    " en cuanto estés dentro, me quedo con la sesión.",
+                    flush=True,
+                ),
+            )
+        else:
+            sesion = await iniciar_sesion(
+                credenciales,
+                headless=not args.ver,
+                base_url=cfg.prisa_base_url,
+                proxy=cfg.prisa_proxy,
+                args_chromium=extra,
+                ejecutable=cfg.prisa_chromium_path,
+            )
     except ErrorLoginPrisa as exc:
         print(f"login rechazado: {exc}", file=sys.stderr)
         if exc.mensaje_sitio:
@@ -93,12 +111,18 @@ async def entrar(args: argparse.Namespace) -> int:
         # el shell haya mordido la contraseña. La longitud lo delata sin
         # imprimirla, y así no hace falta que nadie la escriba en otro sitio
         # para comprobarlo.
-        print(
-            f"  se envió usuario {cfg.prisa_usuario!r} con una contraseña de "
-            f"{len(cfg.prisa_password)} caracteres — si ese número no es el que "
-            "esperas, el shell se comió parte: usa .env o comillas simples",
-            file=sys.stderr,
-        )
+        if credenciales is not None:
+            print(
+                f"  se envió usuario {cfg.prisa_usuario!r} con una contraseña de "
+                f"{len(cfg.prisa_password)} caracteres — si ese número no es el que "
+                "esperas, el shell se comió parte: usa .env o comillas simples",
+                file=sys.stderr,
+            )
+            print(
+                "  si el número cuadra y prisa.cl la sigue rechazando, entra a mano:"
+                "  uv run python -m scripts.prisa_login --manual",
+                file=sys.stderr,
+            )
         return 1
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -126,6 +150,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--arg", action="append", help="bandera extra para Chromium (repetible)"
+    )
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        help="abre el navegador para que entres tú y se queda con la sesión",
+    )
+    parser.add_argument(
+        "--espera", type=int, default=300, help="segundos de espera con --manual"
     )
     return asyncio.run(entrar(parser.parse_args()))
 
