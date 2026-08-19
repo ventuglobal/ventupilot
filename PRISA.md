@@ -63,9 +63,13 @@ lo que se envía no es literalmente lo que se escribió. Un correo viaja tal cua
 
 ## Cómo se resuelve aquí
 
-Un **Chromium headless normal pasa las tres barreras sin ayuda**. Comprobado
-contra el sitio: el reCAPTCHA invisible no levanta reto y el POST llega al nivel
-de aplicación. No hace falta ningún servicio de resolución de captchas.
+Un Chromium **con ventana** pasa las tres barreras sin ayuda. No hace falta
+ningún servicio de resolución de captchas: el reCAPTCHA invisible no levanta
+reto y el POST llega al nivel de aplicación con su token de ~2.400 caracteres.
+
+En **headless** el POST también llega, pero el sitio lo rechaza. Por eso el
+valor por defecto es con ventana, sobre Xvfb cuando no hay pantalla — ver más
+abajo.
 
 El navegador es para **entrar**, no para quedarse: mantener un Chromium vivo por
 petición no se sostiene en un worker. Una vez dentro, prisa.cl es un sitio
@@ -141,7 +145,7 @@ Opciones útiles:
 
 | | |
 |---|---|
-| `--ver` | abre el navegador con ventana, para ver qué pasa cuando el formulario cambia |
+| `--headless` | sin ventana. Solo con un perfil que ya traiga sesión |
 | `--forzar` | entra aunque la sesión guardada siga siendo válida |
 | `--arg=...` | bandera extra para Chromium, repetible |
 | `--manual` | abre el navegador para que entres tú; ver abajo |
@@ -193,7 +197,7 @@ llamada.
 |---|---|
 | `RuntimeError: siguió desafiando` | el WAF cambió el script; resuélvelo con navegador y revisa `desafio.py` |
 | `no supe resolver` | mismo caso, pero la forma del script ya no encaja con los regex |
-| «no autenticó» sin mensaje del sitio | el formulario cambió: corre con `--ver` y mira |
+| «no autenticó» sin mensaje del sitio | mira `prisa-fallo.png`, que el propio comando deja |
 | «tu cuenta ha sido deshabilitada» | es del lado de Prisa, no del código |
 | «los datos ingresados son incorrectos» | credencial, no código. Mira el recuento de caracteres que imprime el propio comando: si no cuadra, el shell mordió la clave — pásala por `.env` |
 | aparece un reto visual de reCAPTCHA | reputación de la IP — ver abajo |

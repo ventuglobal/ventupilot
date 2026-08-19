@@ -10,8 +10,9 @@ Uso: pon las credenciales en `.env` y corre
 
     uv run python -m scripts.prisa_login
 
-    # Ver el navegador mientras lo hace (para depurar cambios del formulario):
-    uv run python -m scripts.prisa_login --ver
+    # Sin ventana. Solo sirve si el perfil persistente ya trae sesión:
+    # el login desde cero no pasa en headless.
+    uv run python -m scripts.prisa_login --headless
 
 `.env` antes que `export`, y no es solo por seguir la convención del proyecto:
 `export PRISA_PASSWORD="clave$con!signos"` deja que el shell se coma el `$` y
@@ -100,6 +101,7 @@ async def entrar(args: argparse.Namespace) -> int:
                 headless=args.headless,
                 base_url=cfg.prisa_base_url,
                 perfil=Path(cfg.prisa_perfil_path) if cfg.prisa_perfil_path else None,
+                captura_fallo=Path("prisa-fallo.png"),
                 proxy=cfg.prisa_proxy,
                 args_chromium=extra,
                 ejecutable=cfg.prisa_chromium_path,
@@ -108,6 +110,8 @@ async def entrar(args: argparse.Namespace) -> int:
         print(f"login rechazado: {exc}", file=sys.stderr)
         if exc.mensaje_sitio:
             print(f"  prisa.cl dijo: {exc.mensaje_sitio}", file=sys.stderr)
+        if exc.captura is not None:
+            print(f"  foto de la pantalla: {exc.captura}", file=sys.stderr)
         # Lo que de verdad hay que descartar antes de dudar de la cuenta es que
         # el shell haya mordido la contraseña. La longitud lo delata sin
         # imprimirla, y así no hace falta que nadie la escriba en otro sitio

@@ -18,3 +18,6 @@ htmlcov/
 
 # Perfil persistente del navegador para prisa.cl.
 .prisa-perfil/
+
+# Captura de diagnóstico del login de prisa.cl.
+prisa-fallo.png

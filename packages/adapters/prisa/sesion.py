@@ -81,11 +81,19 @@ class ErrorLoginPrisa(Exception):
     `mensaje_sitio` lleva el texto que mostró prisa.cl cuando lo hubo. Es la
     diferencia entre "la contraseña está mal" y "la cuenta está deshabilitada",
     y solo la primera se arregla cambiando la configuración.
+
+    `captura` es la ruta de una foto de la pantalla en el momento del fallo.
+    Existe porque el sitio no siempre pinta un aviso: cuando no lo hace, "no
+    autenticó" a secas no dice nada y la única forma de avanzar es mirar. Con la
+    foto se mira una vez, en vez de volver a correrlo con ventana a ver qué pasa.
     """
 
-    def __init__(self, mensaje: str, *, mensaje_sitio: str = "") -> None:
+    def __init__(
+        self, mensaje: str, *, mensaje_sitio: str = "", captura: Path | None = None
+    ) -> None:
         super().__init__(mensaje)
         self.mensaje_sitio = mensaje_sitio
+        self.captura = captura
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,6 +301,7 @@ async def iniciar_sesion(
     args_chromium: tuple[str, ...] = (),
     ejecutable: str = "",
     perfil: Path | None = None,
+    captura_fallo: Path | None = None,
     timeout_ms: int = 45_000,
 ) -> Sesion:
     """Entra en prisa.cl con un navegador y devuelve las cookies resultantes.
@@ -306,6 +315,7 @@ async def iniciar_sesion(
             ventu 1.0—, así que se abre con ventana y, en un servidor sin
             monitor, sobre una Xvfb que se levanta sola. Ponerlo en True solo
             tiene sentido con un `perfil` que ya traiga sesión.
+        captura_fallo: dónde dejar una foto de la pantalla si el login no pasa.
         perfil: directorio de perfil persistente de Chromium. Guarda cookies e
             historial entre corridas, que es lo que hace que el reCAPTCHA deje
             de tratar cada login como un visitante recién llegado.
@@ -366,13 +376,17 @@ async def iniciar_sesion(
 
         if not await _esta_autenticado(pagina):
             aviso = await _mensaje_del_sitio(pagina)
+            foto = await _fotografiar(pagina, captura_fallo)
             log.warning(
-                "login rechazado en prisa.cl para %s", _enmascarar(credenciales.usuario)
+                "login rechazado en prisa.cl para %s (quedó en %s)",
+                _enmascarar(credenciales.usuario),
+                pagina.url,
             )
             raise ErrorLoginPrisa(
                 f"prisa.cl no autenticó a {_enmascarar(credenciales.usuario)}"
-                + (f": {aviso}" if aviso else ""),
+                + (f": {aviso}" if aviso else f" y no mostró aviso; quedó en {pagina.url}"),
                 mensaje_sitio=aviso,
+                captura=foto,
             )
 
         if not any("remember" in nombre.lower() for nombre in cookies):
@@ -446,6 +460,23 @@ async def iniciar_sesion_manual(
         raise ErrorLoginPrisa(
             f"pasaron {espera_max_s}s sin que se completara el login en el navegador"
         )
+
+
+async def _fotografiar(pagina: Any, destino: Path | None) -> Path | None:
+    """Guarda una foto de la pantalla. None si no se pidió o si no se pudo.
+
+    Nunca aborta el login por no poder sacarla: es diagnóstico, y perder el
+    error real por fallar al fotografiarlo sería el peor cambio posible.
+    """
+    if destino is None:
+        return None
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        await pagina.screenshot(path=str(destino), full_page=False)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("no se pudo capturar la pantalla: %s", exc)
+        return None
+    return destino
 
 
 async def _marcar_recordarme(pagina: Any) -> None:
