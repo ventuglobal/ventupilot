@@ -322,6 +322,31 @@ otro, o la búsqueda entra por un parámetro suelto. Quien lo retome: compare el
 cuántos registros— porque esas filas son los precios negociados de la cuenta y
 esa salida se acaba pegando en un chat o en un issue.
 
+### Un datagrid sin sesión también contesta que sí
+
+Y esto es lo que hace falta saber antes de creerse una extracción. Pedido **sin
+sesión**, el mismo endpoint devuelve `200`, JSON bien formado, 20 filas, las
+mismas 25 columnas y un total de 9.825 registros. Todas las señales que uno
+miraría para dar la extracción por buena están ahí.
+
+Lo único que cambia es que los precios vienen vacíos: `has_price` en blanco,
+`minimal_price` a `null`, `private_label_sku` a `null`. Es el catálogo público,
+que para comprar no sirve de nada.
+
+Por eso `--ajax` cuenta cuántas filas traen precio:
+
+```
+total       9825 registros según el servidor
+con precio  0 de 20 filas
+            ninguna fila trae precio: esto es el catálogo público.
+            La sesión no llegó o ya caducó.
+```
+
+Esa línea es la que responde «¿está extrayendo los datos?». `filas 20` no lo
+responde. Es la misma idea que el canario de precios de `verify_b2b()` en ventu
+1.0, y por el mismo motivo: en OroCommerce, el fallo de sesión no se parece a
+un fallo.
+
 ## Apify
 
 La idea original era usar el [MCP de Apify] para este login. **No hace falta**,

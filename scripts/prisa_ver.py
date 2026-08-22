@@ -42,7 +42,7 @@ _RE_TITULO = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
 # OroCommerce pinta sus listados con datagrids de JavaScript, no con <table>.
 # Estos son los rastros que deja en el HTML y que dicen dónde está el JSON.
 _RE_GRID_NOMBRE = re.compile(r'["\']gridName["\']\s*:\s*["\']([\w-]+)["\']')
-_RE_GRID_URL = re.compile(r'(/datagrid/[\w/-]+|/api/rest/[\w/-]+|/ajax/[\w/-]+)')
+_RE_GRID_URL = re.compile(r"(/datagrid/[\w/-]+|/api/rest/[\w/-]+|/ajax/[\w/-]+)")
 _RE_COMPONENTE = re.compile(r'data-page-component-module=["\']([^"\']+)["\']')
 _RE_RUTA_DATOS = re.compile(r'"(/(?:product|customer|catalog|pricing)[\w/-]*)"')
 _RE_TABLA = re.compile(r"<table", re.I)
@@ -111,9 +111,7 @@ async def ver(args: argparse.Namespace) -> int:
     return 0 if autenticado else 1
 
 
-def _informar_json(
-    args: argparse.Namespace, respuesta: object, cuerpo: str
-) -> int:
+def _informar_json(args: argparse.Namespace, respuesta: object, cuerpo: str) -> int:
     """Describe la forma de una respuesta JSON, no su contenido.
 
     Un datagrid devuelve las filas de la cuenta —precios negociados, pedidos—,
@@ -146,12 +144,41 @@ def _informar_json(
         if total is not None:
             print(f"total       {total} registros según el servidor")
 
+    if isinstance(filas, list):
+        _canario_precios(filas)
+
     if args.guardar:
         destino = Path(args.guardar)
         destino.write_text(cuerpo, encoding="utf-8")
         print(f"guardado    {destino}")
 
     return 0
+
+
+def _canario_precios(filas: list[object]) -> None:
+    """¿Estas filas traen los precios de la cuenta, o solo el catálogo público?
+
+    El datagrid contesta igual de bien a un visitante anónimo: mismas 9.800 y
+    pico filas, mismas columnas, `200` y JSON. Lo único que cambia es que
+    `has_price` viene vacío y `minimal_price` es `null`. Sin mirar eso, una
+    extracción sin sesión se ve idéntica a una con sesión —y es catálogo sin
+    precios, que para comprar no sirve de nada.
+
+    Se cuentan filas, nunca importes: esta salida acaba pegada en un chat.
+    """
+    con_precio = sum(
+        1
+        for f in filas
+        if isinstance(f, dict) and f.get("has_price") not in (None, "", False, "false", 0)
+    )
+    if not filas:
+        return
+    print(f"con precio  {con_precio} de {len(filas)} filas")
+    if con_precio == 0:
+        print(
+            "            ninguna fila trae precio: esto es el catálogo público."
+            " La sesión no llegó o ya caducó."
+        )
 
 
 def _es_json(cuerpo: str) -> bool:
