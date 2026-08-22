@@ -12,3 +12,12 @@ build/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Cookies de sesión de prisa.cl: equivalen a la contraseña mientras duran.
+.prisa-sesion.json
+
+# Perfil persistente del navegador para prisa.cl.
+.prisa-perfil/
+
+# Captura de diagnóstico del login de prisa.cl.
+prisa-fallo.png

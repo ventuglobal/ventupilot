@@ -86,6 +86,10 @@ packages/
     clientes.py      permisos por wa_id_hash
     conversaciones.py  conversación e historial
     propuestas.py    cotizaciones emitidas
+    prisa/           acceso autenticado al portal B2B de prisa.cl — ver PRISA.md
+      desafio.py     desafío JS del WAF, resuelto sin navegador
+      sesion.py      login con navegador (el formulario lleva reCAPTCHA)
+      cliente.py     navegación posterior con httpx y las cookies del login
     whatsapp/
       signature.py   HMAC del webhook
       identity.py    hasheo de wa_id con pepper
