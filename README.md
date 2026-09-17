@@ -159,12 +159,35 @@ no le corta el acceso, para que un despliegue con la variable mal copiada no
 deje a nadie fuera en silencio. Revocar es explícito, con
 `ClientesRepo.desactivar`.
 
+## Ejecutar el pedido
+
+Al confirmar una propuesta se crea, en la misma transacción, la orden real en
+ventu 1.0: `orders_order` + `orders_orderitem`, con `source="whatsapp"`, junto
+al registro en `ventupilot.ordenes` que enlaza ambas por `referencia_ext`.
+`packages/adapters/ordenes.py` escribe las dos tablas por SQL directo —
+comparten la misma Postgres— y no por un endpoint de ventu 1.0.
+
+Apagado por defecto (`CREAR_ORDEN_VENTU=false`): escribe sobre tablas de las
+que depende la facturación, y conviene encenderlo a propósito. Con el flag en
+false, el flujo es el de siempre — el ejecutivo tipea el carrito a mano.
+
+Lo que la orden **no** trae porque el botón de confirmar no lo sabe: RUT y
+dirección de despacho. Sin RUT la orden no queda `is_ready_for_invoicing` en
+ventu 1.0 (esa propiedad lo exige), así que sigue siendo el ejecutivo quien
+contacta al cliente y completa esos datos antes de facturar — la orden ya
+tiene el carrito cargado, no reemplaza esa conversación.
+
+`orders_order` tiene ~19 columnas NOT NULL sin default a nivel de base de
+datos (Django no empuja `default=` al esquema); el INSERT las lista todas
+explícitamente para no depender de si la migración de ventu que agrega
+`source="whatsapp"` a `Order.SOURCE_CHOICES` ya se desplegó — `choices` no es
+una restricción de la base de datos, así que no importa el orden. Una columna
+NOT NULL nueva que ventu agregue a `Order`/`OrderItem` y no esté en ese INSERT
+rompe la creación de la orden; es el costo aceptado de SQL directo en vez de
+un endpoint propio.
+
 ## Pendiente
 
-- **Ejecutar el pedido.** Una propuesta confirmada queda registrada y se avisa
-  a un ejecutivo. `ventupilot.ordenes` existe pero nadie la escribe todavía:
-  crear la orden en ventu 1.0 es escritura sobre tablas de Django y hay que
-  decidirlo con su dueño.
 - **Ventana de 24h.** `ultimo_msg_usuario_at` se mantiene al día, pero nadie
   decide todavía entre mensaje libre y plantilla a partir de él.
 - **Métricas de entrega.** Los `statuses` del webhook se parsean y se descartan.

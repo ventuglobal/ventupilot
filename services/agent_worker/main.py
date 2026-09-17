@@ -29,6 +29,7 @@ from packages.adapters.catalogo import CatalogoRepo
 from packages.adapters.clientes import ClientesRepo
 from packages.adapters.cola import ColaRepo, Tarea
 from packages.adapters.config import Settings, get_settings
+from packages.adapters.ordenes import OrdenesRepo
 from packages.adapters.propuestas import PropuestasRepo
 from packages.adapters.whatsapp.client import ErrorWhatsApp, WhatsAppClient, cuerpo_texto
 from packages.adapters.whatsapp.identity import enmascarar, hash_wa_id
@@ -251,6 +252,7 @@ async def main() -> None:
         ),
         clientes=clientes,
         propuestas=PropuestasRepo(pool),
+        ordenes=OrdenesRepo(pool),
     )
     worker = Worker(pool, cliente, settings, handler)
 

@@ -31,6 +31,7 @@ from packages.adapters import conversaciones
 from packages.adapters.catalogo import CatalogoRepo
 from packages.adapters.clientes import ClientesRepo
 from packages.adapters.config import Settings
+from packages.adapters.ordenes import OrdenesRepo
 from packages.adapters.propuestas import PropuestasRepo
 from packages.adapters.whatsapp.client import cuerpo_texto
 from packages.adapters.whatsapp.identity import enmascarar
@@ -99,11 +100,13 @@ class HandlerAgente:
         catalogo: CatalogoRepo,
         clientes: ClientesRepo,
         propuestas: PropuestasRepo,
+        ordenes: OrdenesRepo | None = None,
     ) -> None:
         self._settings = settings
         self._catalogo = catalogo
         self._clientes = clientes
         self._propuestas = propuestas
+        self._ordenes = ordenes
 
     async def __call__(
         self, conn: asyncpg.Connection, mensaje: MensajeEntrante, wa_id_hash: str
@@ -163,7 +166,25 @@ class HandlerAgente:
         cambio = await self._propuestas.resolver(
             conn, propuesta_id, estado, wa_id_hash=wa_id_hash
         )
-        return exito if cambio else MSG_NO_DISPONIBLE
+        if not cambio:
+            return MSG_NO_DISPONIBLE
+
+        # Ejecutar el pedido: crea la orden real en ventu 1.0. Apagado por
+        # defecto (ver `Settings.crear_orden_ventu`); mientras esté apagado,
+        # el ejecutivo la sigue creando a mano, como dice `exito`.
+        if estado == EstadoPropuesta.CONFIRMADA and self._settings.crear_orden_ventu:
+            if self._ordenes is None:
+                log.error("crear_orden_ventu=true pero no se inyectó OrdenesRepo")
+            else:
+                await self._ordenes.crear(
+                    conn,
+                    propuesta_id,
+                    wa_id_hash=wa_id_hash,
+                    wa_id=mensaje.wa_id,
+                    nombre_perfil=mensaje.nombre_perfil,
+                )
+
+        return exito
 
     async def _correr_agente(
         self,

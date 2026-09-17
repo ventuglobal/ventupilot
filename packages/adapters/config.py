@@ -131,6 +131,16 @@ class Settings(BaseSettings):
     # mejora la respuesta y sí infla el costo de cada turno.
     max_resultados_busqueda: int = 8
 
+    # ── Ejecutar el pedido ──
+    # Al confirmar una propuesta, crea la orden real en ventu 1.0
+    # (`orders_order` + `orders_orderitem`, source="whatsapp") además del
+    # registro en `ventupilot.ordenes`. Apagado por defecto: escribe sobre
+    # tablas de las que depende la facturación, y conviene encenderlo a
+    # propósito y no por default de librería. Con esto en False, el flujo se
+    # comporta como hasta ahora — "un ejecutivo la toma desde aquí" sigue
+    # siendo el ejecutivo tipeando el carrito a mano.
+    crear_orden_ventu: bool = False
+
     log_level: str = "INFO"
 
     @property
