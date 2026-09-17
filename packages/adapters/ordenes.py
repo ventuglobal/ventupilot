@@ -99,12 +99,28 @@ class OrdenesRepo:
             "ejecutivo antes de poder facturar."
         )
 
+        # `orders_order` tiene ~30 columnas TEXT/CHAR con `blank=True` pero sin
+        # `null=True` ni `default=`: a nivel de Django eso se rellena solo
+        # porque `CharField.get_default()` cae a `""` cuando el ORM instancia
+        # una fila nueva — un comportamiento de Python, no un DEFAULT de la
+        # base. Un INSERT que las omita revienta con NotNullViolationError
+        # (así se descubrió: contra una Postgres de prueba con este mismo
+        # esquema). Van todas explícitas acá, aunque ventu 1.0 nunca las use
+        # para una orden de WhatsApp, salvo `''` como valor.
         order_pk = await conn.fetchval(
             """
             INSERT INTO orders_order
                    (source, buyer_name, status, total_amount,
                     date_created, last_updated, created_at, updated_at,
                     discount_amount, shipping_cost,
+                    shopify_order_name, falabella_order_number,
+                    shipping_status, shipping_substatus,
+                    shipping_logistic_type, shipping_mode,
+                    shipping_tracking_number, is_flex, shipping_place_id,
+                    shipping_receiver_address, shipping_receiver_name,
+                    shipping_receiver_phone,
+                    buyer_rut, buyer_rut_raw, buyer_cust_type, buyer_giro,
+                    buyer_address, buyer_commune, buyer_city,
                     billing_is_normalized, billing_placeholders,
                     billing_fetch_status, billing_error_msg,
                     ventu_notes, ventu_ok, ventu_archived, has_open_claim,
@@ -112,10 +128,18 @@ class OrdenesRepo:
             VALUES ($1, $2, $3, $4,
                     $5, $5, $5, $5,
                     0, 0,
+                    $7::text, $7::text,
+                    $7::text, $7::text,
+                    $7::text, $7::text,
+                    $7::text, false, $7::text,
+                    $7::text, $7::text,
+                    $7::text,
+                    $7::text, $7::text, $7::text, $7::text,
+                    $7::text, $7::text, $7::text,
                     false, '[]'::jsonb,
-                    '', '',
+                    $7::text, $7::text,
                     $6, false, false, false,
-                    '')
+                    $7::text)
             RETURNING id
             """,
             "whatsapp",
@@ -124,6 +148,7 @@ class OrdenesRepo:
             total,
             ahora,
             nota,
+            "",
         )
 
         await conn.executemany(
